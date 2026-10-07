@@ -12,6 +12,7 @@ import argparse
 import ipaddress
 import json
 import random
+from collections import Counter
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -138,8 +139,57 @@ def _background_noise(log, rng, day_start, noise_pool, ips_per_day) -> None:
             ts += timedelta(seconds=rng.randint(3, 120))
 
 
-def generate(start_date: date, days: int = 1, seed: int = 42, noise_ips_per_day: int = 30):
-    """(log satırları, etiket sözlüğü) döndürür. Her güne 4 saldırı tipinden birer tane gömülür."""
+BAD_LINE_KINDS = [
+    "malformed_line", "invalid_timestamp", "invalid_ip", "invalid_port", "missing_field", "duplicate",
+]
+
+
+def _inject_bad_lines(lines: list[str], rng: random.Random, ratio: float) -> tuple[list[str], dict]:
+    """Veri kalitesi kontrollerini sınamak için bozuk satırlar ekler.
+
+    Her tür, pipeline'da aynı isimli red sebebiyle karantinaya düşmelidir.
+    (yeni satır listesi, {tür: adet}) döndürür.
+    """
+    count = round(len(lines) * ratio)
+    auth_indexes = [i for i, line in enumerate(lines) if " password for " in line]
+    injections = []
+    counts: Counter = Counter()
+    for n in range(count):
+        kind = BAD_LINE_KINDS[n % len(BAD_LINE_KINDS)]
+        i = rng.choice(auth_indexes) if kind == "duplicate" else rng.randrange(len(lines))
+        # Zaman sırası bozulmasın diye komşu satırın zaman damgası kullanılır.
+        stamp = lines[i][:15]
+        prefix = f"{stamp} {HOST} sshd[{rng.randint(2000, 60000)}]: "
+        port = rng.randint(1024, 65535)
+        if kind == "malformed_line":
+            bad = rng.choice(["#### corrupted log entry ####", prefix + "Failed password for root from"])
+        elif kind == "invalid_timestamp":
+            bad = f"Feb 30 {stamp[7:]} {HOST} sshd[{port}]: Failed password for root from 192.0.2.1 port {port} ssh2"
+        elif kind == "invalid_ip":
+            bad = prefix + f"Failed password for root from 999.{rng.randint(0, 255)}.{rng.randint(0, 255)}.1 port {port} ssh2"
+        elif kind == "invalid_port":
+            bad = prefix + f"Failed password for root from 192.0.2.1 port {rng.randint(65536, 99999)} ssh2"
+        elif kind == "missing_field":
+            bad = prefix + f"Failed password for  from 192.0.2.1 port {port} ssh2"
+        else:
+            bad = lines[i]
+        injections.append((i, bad))
+        counts[kind] += 1
+
+    result = list(lines)
+    for i, bad in sorted(injections, key=lambda item: item[0], reverse=True):
+        result.insert(i + 1, bad)
+    return result, dict(counts)
+
+
+def generate(
+    start_date: date, days: int = 1, seed: int = 42, noise_ips_per_day: int = 30, bad_ratio: float = 0.0
+):
+    """(log satırları, etiket sözlüğü) döndürür. Her güne 4 saldırı tipinden birer tane gömülür.
+
+    bad_ratio > 0 ise temiz satır sayısının o oranı kadar bozuk satır eklenir;
+    temiz satırlar ve saldırı etiketleri bundan etkilenmez.
+    """
     rng = random.Random(seed)
     log = LogBuilder(rng)
 
@@ -175,7 +225,9 @@ def generate(start_date: date, days: int = 1, seed: int = 42, noise_ips_per_day:
         "legit_users": home_ips,
         "attacks": attacks,
     }
-    return log.lines(), labels
+    # Ayrı bir RNG: bozuk satır eklemek temiz çıktıyı değiştirmez.
+    lines, labels["injected_bad_lines"] = _inject_bad_lines(log.lines(), random.Random(seed + 1), bad_ratio)
+    return lines, labels
 
 
 def main() -> None:
@@ -184,9 +236,10 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=1)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", default="data/raw/synthetic_auth.log")
+    ap.add_argument("--bad-ratio", type=float, default=0.0, help="Eklenecek bozuk satır oranı (örn. 0.02)")
     args = ap.parse_args()
 
-    lines, labels = generate(args.start_date, args.days, args.seed)
+    lines, labels = generate(args.start_date, args.days, args.seed, bad_ratio=args.bad_ratio)
     out = Path(args.out)
     labels_path = out.with_name(out.stem + "_labels.json")
     out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
@@ -197,6 +250,8 @@ def main() -> None:
     for a in labels["attacks"]:
         print(f"  #{a['attack_id']} {a['attack_type']:<24} {a['source_ip']:<16} "
               f"{a['failed_attempts']:>3} başarısız, başarı={a['succeeded']}  {a['start_time']}")
+    if labels["injected_bad_lines"]:
+        print(f"Bozuk   : {sum(labels['injected_bad_lines'].values())} satır {labels['injected_bad_lines']}")
 
 
 if __name__ == "__main__":
