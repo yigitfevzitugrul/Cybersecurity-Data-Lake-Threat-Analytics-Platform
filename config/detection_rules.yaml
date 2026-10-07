@@ -1,0 +1,38 @@
+# Tespit kurallarının eşikleri. Değiştirdikten sonra:
+#   python -m src.detection.engine --reset
+#
+# "Oturum": aynı anahtara (ör. IP) ait, aralarında window_minutes'tan uzun
+# boşluk olmayan ardışık olaylar. Her oturum en fazla bir alarm üretir.
+
+brute_force:
+  # Aynı IP → aynı kullanıcı: window_minutes içinde en az bu kadar başarısız deneme.
+  window_minutes: 5
+  min_failed_attempts: 10
+  # Oturumdaki toplam deneme bu sayıya ulaşırsa önem derecesi "high" olur.
+  high_severity_attempts: 50
+
+password_spray:
+  # Aynı IP → çok farklı kullanıcı: window_minutes içinde en az bu kadar farklı kullanıcı...
+  window_minutes: 30
+  min_distinct_users: 10
+  # ...ve kullanıcı başına ortalama deneme en fazla bu kadar (çok deneme = brute force).
+  max_avg_attempts_per_user: 3
+  high_severity_users: 20
+
+suspicious_ip:
+  # root ya da sistemde olmayan kullanıcılara yönelik denemeler (keşif / tarama).
+  window_minutes: 60
+  min_attempts: 5
+  # Aynı IP bu kadar farklı sunucuyu denediyse deneme sayısına bakılmadan alarm üretilir.
+  min_distinct_hosts: 3
+
+auth_anomaly:
+  # Başarılı girişlerde olağandışılık. Sebeplerden en az biri varsa alarm üretilir.
+  # 1) success_after_failures: girişten önceki window_minutes içinde aynı IP'den çok başarısız deneme
+  window_minutes: 30
+  min_prior_failures: 5
+  # 2) new_ip: kullanıcının daha önce hiç giriş yapmadığı IP (yeterli geçmişi varsa)
+  min_history_logins: 3
+  # 3) off_hours: mesai dışı giriş. Mesai [start, end) saat aralığıdır.
+  business_hours_start: 7
+  business_hours_end: 20
