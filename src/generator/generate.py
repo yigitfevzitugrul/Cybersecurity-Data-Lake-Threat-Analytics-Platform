@@ -32,6 +32,7 @@ BRUTE_FORCE = "brute_force"
 PASSWORD_SPRAY = "password_spray"
 SUCCESS_AFTER_FAILURES = "success_after_failures"
 OFF_HOURS_NEW_IP = "off_hours_new_ip_login"
+SLOW_BRUTE_FORCE = "slow_brute_force"
 
 
 class LogBuilder:
@@ -64,8 +65,6 @@ class LogBuilder:
         self._add(ts, pid, f"Accepted password for {user} from {ip} port {port} ssh2")
         self._add(ts, pid, f"pam_unix(sshd:session): session opened for user {user} by (uid=0)")
 
-    def lines(self) -> list[str]:
-        return [line for _, _, line in sorted(self.entries)]
 
 
 def _label(attack_type, ip, users, times, failed, succeeded) -> dict:
@@ -182,13 +181,63 @@ def _inject_bad_lines(lines: list[str], rng: random.Random, ratio: float) -> tup
     return result, dict(counts)
 
 
+def _hard_cases(rng: random.Random, start_date: date, days: int, home_ips: dict):
+    """Tespit kurallarını zorlayan durumlar; (satır kayıtları, saldırılar, zararsız benzerler) döndürür.
+
+    Her güne iki durum eklenir:
+      - slow_brute_force  : eşiklerin altında kalacak kadar yavaş bir brute force (kaçırılması beklenir)
+      - forgotten_password: şifresini unutan gerçek kullanıcı; kendi IP'sinden art arda
+                            başarısız denemeler ve ardından başarılı giriş (yanlış alarm üretmesi beklenir)
+    """
+    log = LogBuilder(rng)
+    attacks, benign = [], []
+    for d in range(days):
+        day_start = datetime.combine(start_date + timedelta(days=d), time.min)
+
+        # 100.64.0.0/10 (RFC 6598) de internette yönlendirilmeyen bir bloktur.
+        ip = f"100.64.{d % 256}.{rng.randint(1, 254)}"
+        user = rng.choice(["root"] + LEGIT_USERS)
+        ts = day_start + timedelta(seconds=rng.randint(0, 16 * 3600))
+        times = []
+        for _ in range(rng.randint(20, 30)):
+            log.failed(ts, user, ip)
+            times.append(ts)
+            ts += timedelta(seconds=rng.randint(360, 600))
+        attacks.append(_label(SLOW_BRUTE_FORCE, ip, [user], times, len(times), False))
+
+        user = rng.choice(LEGIT_USERS)
+        ts = day_start + timedelta(seconds=rng.randint(8 * 3600, 17 * 3600))
+        times = []
+        for _ in range(rng.randint(10, 14)):
+            log.failed(ts, user, home_ips[user])
+            times.append(ts)
+            ts += timedelta(seconds=rng.randint(3, 8))
+        log.accepted(ts, user, home_ips[user])
+        benign.append({
+            "case": "forgotten_password",
+            "username": user,
+            "source_ip": home_ips[user],
+            "start_time": times[0].isoformat(),
+            "end_time": ts.isoformat(),
+            "failed_attempts": len(times),
+        })
+    return log.entries, attacks, benign
+
+
 def generate(
-    start_date: date, days: int = 1, seed: int = 42, noise_ips_per_day: int = 30, bad_ratio: float = 0.0
+    start_date: date,
+    days: int = 1,
+    seed: int = 42,
+    noise_ips_per_day: int = 30,
+    bad_ratio: float = 0.0,
+    hard_cases: bool = False,
 ):
     """(log satırları, etiket sözlüğü) döndürür. Her güne 4 saldırı tipinden birer tane gömülür.
 
-    bad_ratio > 0 ise temiz satır sayısının o oranı kadar bozuk satır eklenir;
-    temiz satırlar ve saldırı etiketleri bundan etkilenmez.
+    bad_ratio > 0 ise temiz satır sayısının o oranı kadar bozuk satır eklenir.
+    hard_cases açıksa her güne yavaş bir brute force ve zararsız bir "şifresini
+    unutan kullanıcı" durumu eklenir. İkisi de ayrı RNG kullanır; temel satırlar
+    ve temel saldırı etiketleri bu seçeneklerden etkilenmez.
     """
     rng = random.Random(seed)
     log = LogBuilder(rng)
@@ -214,6 +263,15 @@ def generate(
         attacks.append(_brute_force(log, rng, day_start, ips[2], then_succeed=True))
         attacks.append(_off_hours_login(log, rng, day_start, ips[3]))
 
+    entries = log.entries
+    benign = []
+    if hard_cases:
+        extra_entries, extra_attacks, benign = _hard_cases(random.Random(seed + 2), start_date, days, home_ips)
+        offset = len(entries)
+        entries = entries + [(ts, offset + seq, line) for ts, seq, line in extra_entries]
+        attacks.extend(extra_attacks)
+    clean_lines = [line for _, _, line in sorted(entries)]
+
     attacks.sort(key=lambda a: a["start_time"])
     for i, attack in enumerate(attacks, start=1):
         attack["attack_id"] = i
@@ -224,9 +282,10 @@ def generate(
         "host": HOST,
         "legit_users": home_ips,
         "attacks": attacks,
+        "benign_lookalikes": benign,
     }
     # Ayrı bir RNG: bozuk satır eklemek temiz çıktıyı değiştirmez.
-    lines, labels["injected_bad_lines"] = _inject_bad_lines(log.lines(), random.Random(seed + 1), bad_ratio)
+    lines, labels["injected_bad_lines"] = _inject_bad_lines(clean_lines, random.Random(seed + 1), bad_ratio)
     return lines, labels
 
 
@@ -246,9 +305,13 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", default="data/raw/synthetic_auth.log")
     ap.add_argument("--bad-ratio", type=float, default=0.0, help="Eklenecek bozuk satır oranı (örn. 0.02)")
+    ap.add_argument("--hard-cases", action="store_true",
+                    help="Yavaş brute force ve şifresini unutan kullanıcı durumlarını ekle")
     args = ap.parse_args()
 
-    lines, labels = generate(args.start_date, args.days, args.seed, bad_ratio=args.bad_ratio)
+    lines, labels = generate(
+        args.start_date, args.days, args.seed, bad_ratio=args.bad_ratio, hard_cases=args.hard_cases
+    )
     out = Path(args.out)
     labels_path = write_files(out, lines, labels)
 
@@ -257,6 +320,9 @@ def main() -> None:
     for a in labels["attacks"]:
         print(f"  #{a['attack_id']} {a['attack_type']:<24} {a['source_ip']:<16} "
               f"{a['failed_attempts']:>3} başarısız, başarı={a['succeeded']}  {a['start_time']}")
+    for b in labels["benign_lookalikes"]:
+        print(f"  (zararsız) {b['case']:<21} {b['source_ip']:<16} {b['failed_attempts']:>3} başarısız, "
+              f"sonra başarılı giriş  {b['start_time']}")
     if labels["injected_bad_lines"]:
         print(f"Bozuk   : {sum(labels['injected_bad_lines'].values())} satır {labels['injected_bad_lines']}")
 
