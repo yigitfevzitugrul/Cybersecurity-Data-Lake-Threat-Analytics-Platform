@@ -2,7 +2,7 @@
 
 Security/auth loglarını toplayan, ETL'den geçiren, veri kalitesini kontrol eden, AWS Data Lake'te depolayan ve tehditleri tespit edip Grafana'da görselleştiren platform.
 
-> Durum: MVP tamamlandı (Seviye 1–4: pipeline, ETL + veri kalitesi, Docker Compose + Airflow + Grafana, tehdit tespiti). Sırada AWS Data Lake var.
+> Durum: Seviye 1–5 tamamlandı (pipeline, ETL + veri kalitesi, Docker Compose + Airflow + Grafana, tehdit tespiti, AWS Data Lake). Sırada bulut akışının DAG'e bağlanması var.
 
 ## Pipeline
 
@@ -118,6 +118,52 @@ Bu sonuçlar kural tabanlı tespitin bilinen sınırlarını gösterir:
 - Yavaş brute force, kayan pencere eşiğinin altında kaldığı için `brute_force` kuralıyla yakalanamaz. Hedef `root` olduğunda `suspicious_ip` kuralı yine de alarm üretir (saldırıların %84'ü en az bir kuralla yakalanır).
 - Yanlış alarmların tamamı şifresini unutan kullanıcıdan gelir. `auth_anomaly`, giriş kullanıcının bilinen IP'sinden geldiğinde önem derecesini `medium`'a düşürür; `brute_force` ise kullanıcı geçmişine bakmadığı için bunu ayırt edemez.
 - Sonuçlar sentetik veriye aittir; gerçek trafikte oranlar farklı olacaktır. Loghub verisinin etiketi olmadığı için ölçüme girmez.
+
+## AWS Data Lake
+
+Yerel katmanlar aynı mantıkla S3'e taşınır ve Athena ile sorgulanır:
+
+```
+s3://<bucket>/
+├── raw/auth_logs/<dosya>.log                               ham loglar
+├── processed/auth_events/event_date=YYYY-MM-DD/*.parquet   doğrulanmış olaylar (güne göre bölümlü)
+├── curated/alerts/, curated/daily_ip_summary/              alarmlar ve günlük IP özeti
+└── athena-results/                                         sorgu sonuçları (7 gün sonra silinir)
+```
+
+| Bileşen | Ne yapıldı |
+|---|---|
+| S3 | Herkese açık erişim kapalı, sunucu tarafı şifreleme, TLS dışı istekler bucket politikasıyla reddedilir |
+| Glue Data Catalog | `auth_events`, `alerts`, `daily_ip_summary` tabloları. Bölümler *partition projection* ile S3 yolundan hesaplanır; crawler çalıştırmak gerekmez |
+| Athena | Ayrı workgroup; sorgu başına en fazla 100 MB taranabilir (maliyet koruması) |
+| IAM | Pipeline, kalıcı erişim anahtarı olmayan bir rolü üstlenir (`sts:AssumeRole`, 1 saatlik geçici kimlik). Yetkileri [infra/iam/pipeline_policy.json](infra/iam/pipeline_policy.json) dosyasındadır |
+| Budgets | Aylık maliyet bütçesi; gerçekleşen harcama %80'i ya da tahmin %100'ü aşınca e-posta |
+
+Pipeline rolü sadece kendi bucket'ındaki üç katmana yazabilir, Glue kataloğunu okuyabilir ve kendi workgroup'unda sorgu çalıştırabilir. Nesne silemez, başka bucket'ları göremez, tablo ya da IAM ayarı değiştiremez.
+
+Kurulum için `aws configure` ile yapılandırılmış yönetici yetkili bir AWS kimliği gerekir. `.env` içindeki AWS ayarlarını doldurduktan sonra:
+
+```powershell
+python -m src.cloud.setup          # altyapıyı kurar; çıktıdaki rol ARN'ını .env'e yaz
+python -m src.cloud.sync           # raw / processed / curated katmanlarını S3'e gönderir
+python -m src.cloud.athena sql/athena/01_lake_analysis.sql
+python -m src.cloud.verify_access  # rolün en az yetkiyle çalıştığını canlı doğrular
+```
+
+`setup` ve `sync` tekrar çalıştırılabilir: var olan kaynaklar güncellenir, içeriği değişmemiş nesneler yeniden yüklenmez.
+
+Maliyet: bu veri boyutunda (yaklaşık 1 MB) S3, Glue kataloğu ve Athena sorguları pratikte ücretsizdir; örnek analiz dosyasının tamamı 17 KB veri tarar.
+
+Kaynakları kaldırmak için:
+
+```powershell
+aws s3 rb s3://<bucket> --force
+aws glue delete-database --name security_lake
+aws athena delete-work-group --work-group secdl --recursive-delete-option
+aws iam delete-role-policy --role-name secdl-pipeline --policy-name secdl-pipeline-access
+aws iam delete-role --role-name secdl-pipeline
+aws budgets delete-budget --account-id <hesap-no> --budget-name secdl-monthly
+```
 
 ## Kullanım
 

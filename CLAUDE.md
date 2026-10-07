@@ -104,4 +104,13 @@ dags/  grafana/  tests/  docs/
   - DAG: `run_etl` sonrası `detect_threats` task'ı eklendi (konteynerde doğrulandı).
   - Grafana: `grafana/dashboards/security_overview.json` ("Güvenlik: Tehdit Tespiti", 11 panel). Ekran görüntüleri `docs/screenshots/`.
   - Testler: 92 test geçiyor.
-- Sıradaki: Seviye 5 (H5) — AWS: S3 raw/processed/curated (Parquet), IAM en az yetki, Glue, Athena, Budgets alarmı. **Başlamadan önce geliştiriciden gerekli:** AWS hesabı, bölge tercihi, CLI kimlik bilgilerinin (`aws configure`) geliştirici tarafından kurulması. Claude erişim anahtarı girmez/üretmez; maliyet doğuran kaynakları oluşturmadan önce sorar.
+- 2026-10-07: **Seviye 5 bitti** ve canlı AWS üzerinde doğrulandı:
+  - Makinede `aws configure` ile kurulu yönetici kimlik var (bir IAM kullanıcısı, bölge `eu-central-1`). Kurulum root konsolu yerine bununla, `python -m src.cloud.setup` ile yapıldı. Hesap numarası ve bucket adı repoya yazılmaz; `.env`'de durur (`S3_BUCKET`, `AWS_PIPELINE_ROLE_ARN` vb.).
+  - Oluşturulan kaynaklar: S3 bucket `secdl-datalake-<hesap-no>-eu-central-1`, Glue veritabanı `security_lake` (3 tablo), Athena workgroup `secdl`, IAM rolü `secdl-pipeline`, bütçe `secdl-monthly` (aylık 5 USD, e-posta uyarılı).
+  - `src/cloud/`: `config.py` (ayarlar, `pipeline_session` rol üstlenir), `catalog.py` (Parquet + Glue şemaları tek yerde), `setup.py` (idempotent altyapı), `sync.py` (raw dosyalar + PostgreSQL'den processed/curated Parquet; içerik değişmediyse yüklemez), `athena.py` (sorgu çalıştırıcı), `verify_access.py` (rolün yetkilerini güvenli biçimde canlı sınar).
+  - Processed katmanı PostgreSQL'deki tekilleştirilmiş `auth_events`'ten üretilir (yerel `data/processed/*.jsonl` dosyalarından değil), gün başına bir Parquet dosyası.
+  - Glue crawler yok: tablolar boto3 ile tanımlı, `auth_events` partition projection kullanıyor (maliyetsiz, yeni günler kendiliğinden görünür).
+  - IAM: kalıcı erişim anahtarı üretilmedi; rol sadece kurulumu yapan IAM kullanıcısı tarafından üstlenilebilir. Silme, katman dışına yazma, başka bucket/workgroup, IAM işlemleri reddediliyor (11 kontrolün hepsi beklendiği gibi).
+  - Doğrulama: 5 raw dosya + 11 günlük bölüm + 2 curated dosya yüklendi (28 nesne, ~1,2 MB); ikinci sync'te 0 yükleme; 5 Athena sorgusu toplam 16,6 KB taradı.
+  - Testler: 102 test geçiyor (bulut testleri AWS'ye bağlanmaz).
+- Sıradaki: Seviye 6 (H6) — bulut senkronunu DAG'e ekle (Airflow konteynerine AWS kimliği güvenli biçimde nasıl verilecek kararı gerekli: salt-okunur `~/.aws` bağlama ya da ortam değişkeni), uçtan uca bulut akışı, opsiyonel PySpark, README son hali, kod dondurma.
