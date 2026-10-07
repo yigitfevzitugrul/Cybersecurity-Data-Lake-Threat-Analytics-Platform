@@ -230,6 +230,15 @@ def generate(
     return lines, labels
 
 
+def write_files(out: Path, lines: list[str], labels: dict) -> Path:
+    """Logu `out` dosyasına, etiketleri yanına `<ad>_labels.json` olarak yazar; etiket yolunu döndürür."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    labels_path = out.with_name(out.stem + "_labels.json")
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    labels_path.write_text(json.dumps(labels, indent=2), encoding="utf-8")
+    return labels_path
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Gömülü saldırılarla sentetik auth logu üretir.")
     ap.add_argument("--start-date", type=date.fromisoformat, required=True, help="YYYY-MM-DD")
@@ -241,9 +250,7 @@ def main() -> None:
 
     lines, labels = generate(args.start_date, args.days, args.seed, bad_ratio=args.bad_ratio)
     out = Path(args.out)
-    labels_path = out.with_name(out.stem + "_labels.json")
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-    labels_path.write_text(json.dumps(labels, indent=2), encoding="utf-8")
+    labels_path = write_files(out, lines, labels)
 
     print(f"Log     : {out} ({len(lines)} satır)")
     print(f"Etiket  : {labels_path} ({len(labels['attacks'])} saldırı)")

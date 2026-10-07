@@ -1,7 +1,7 @@
 """ETL pipeline: extract → transform → validate → load.
 
 Kullanım:
-    python -m src.etl.pipeline data/raw/OpenSSH_2k.log --year 2025
+    python -m src.etl.pipeline data/raw/OpenSSH_2k.log [--year 2025]
 """
 import argparse
 import logging
@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-from src.etl.extract import file_sha256, read_lines
+from src.etl.extract import file_sha256, infer_year, read_lines
 from src.etl.load import fail_run, finish_run, load_events, load_rejected, start_run, write_processed
 from src.etl.transform import transform
 from src.etl.validate import validate
@@ -18,7 +18,9 @@ from src.utils.db import apply_schema, get_connection
 
 log = logging.getLogger(__name__)
 
-PROCESSED_DIR = Path(__file__).resolve().parents[2] / "data" / "processed"
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
 
 
 def run_pipeline(
@@ -77,21 +79,47 @@ def run_pipeline(
     return stats
 
 
+def find_unprocessed(conn, raw_dir: Path = RAW_DIR) -> list[Path]:
+    """raw_dir altındaki, içeriği daha önce başarıyla işlenmemiş *.log dosyalarını isim sırasıyla döndürür."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT file_sha256 FROM pipeline_runs WHERE status = 'success'")
+        done = {row[0] for row in cur.fetchall()}
+    conn.commit()
+    return [path for path in sorted(Path(raw_dir).glob("*.log")) if file_sha256(path) not in done]
+
+
+def process_new_files(
+    conn, raw_dir: Path = RAW_DIR, processed_dir: Path = PROCESSED_DIR, now: Optional[datetime] = None
+) -> list[dict]:
+    """Yeni dosyaların her birini pipeline'dan geçirir; dosya başına istatistik listesi döndürür."""
+    results = []
+    for path in find_unprocessed(conn, raw_dir):
+        stats = run_pipeline(path, infer_year(path), conn, processed_dir, now)
+        stats["source_file"] = path.name
+        results.append(stats)
+    return results
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Auth log dosyasını ETL pipeline'ından geçirir.")
     ap.add_argument("path")
-    ap.add_argument("--year", type=int, required=True, help="Logların ait olduğu yıl (syslog satırında yıl yok)")
+    ap.add_argument(
+        "--year", type=int,
+        help="Logların ait olduğu yıl (syslog satırında yıl yok). Verilmezse dosya tarihinden tahmin edilir.",
+    )
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+    year = args.year or infer_year(args.path)
     conn = get_connection()
     try:
         apply_schema(conn)
-        stats = run_pipeline(args.path, args.year, conn)
+        stats = run_pipeline(args.path, year, conn)
     finally:
         conn.close()
 
+    print(f"Yıl                : {year}" + ("" if args.year else " (tahmin)"))
     print(f"Çalıştırma no      : {stats['run_id']}")
     print(f"Okunan satır       : {stats['lines_read']}")
     print(f"İlgisiz satır      : {stats['lines_irrelevant']}")
