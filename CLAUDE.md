@@ -60,5 +60,17 @@ dags/  grafana/  tests/  docs/
 - Ortam: Python 3.12.4, Docker 29.6.1 + Compose v5.1.4, Git 2.45.2, WSL2.
 - Makinede 5432'de yerel bir PostgreSQL çalışıyor; proje konteyneri host'ta **5433** portunu kullanır.
 - Veri kaynağı planı (Loghub OpenSSH + sentetik üreteç) onaylandı.
-- Git: commit/push'ları geliştirici manuel yapar. Claude git komutu çalıştırmaz, sadece commit noktalarında komut önerir. Git dışındaki her şeyi sormadan yapıp kendisi doğrular.
-- Sıradaki: Seviye 1 / Aşama 3 (Loghub OpenSSH logunu `data/raw`'a indir, `src/etl/parser.py` + testleri).
+- Git: commit/push'ları geliştirici manuel yapar. Claude git komutu çalıştırmaz, sadece commit noktalarında komut önerir. Git dışındaki her şeyi (indirmeler dahil) sormadan yapıp kendisi doğrular; sadece kritik durumlarda sorar.
+- 2026-10-07: Seviye 1 / Aşama 3–4 tamamlandı ve doğrulandı:
+  - `data/raw/OpenSSH_2k.log` indirildi (Loghub, 2000 satır, tamamı "Dec 10"; yıl bilinmediği için `--year 2025` ile yüklendi).
+  - `src/etl/parser.py`: satır → `AuthEvent` | `None` (ilgisiz) | `ParseError` (bozuk). Sadece `Failed/Accepted <method> for ...` satırları olay sayılır; pam/Invalid user/disconnect satırları aynı denemenin tekrarı olduğu için atlanır.
+  - "message repeated N times" tek olay + `repeat_count=N`. **Deneme sayan her sorgu `SUM(repeat_count)` kullanmalı, `COUNT(*)` değil.**
+  - `auth_events` şeması `sql/schema/001_auth_events.sql`; idempotency anahtarı `event_hash` = sha256(event_time + ham satır), `ON CONFLICT DO NOTHING`.
+  - `src/etl/load.py` (`python -m src.etl.load <dosya> --year <yıl>`), `sql/analysis/01_basic_analysis.sql`, 20 pytest testi geçiyor.
+  - Sonuç: 2000 satır → 525 olay (524 başarısız / 532 deneme, 1 başarılı), 0 bozuk; ikinci yüklemede 0 yeni kayıt.
+- 2026-10-07: Seviye 1 / Aşama 5 tamamlandı → **Seviye 1 bitti.**
+  - `src/generator/generate.py` (`python -m src.generator.generate --start-date YYYY-MM-DD --days N --seed S`): normal trafik (8 kullanıcı, `10.20.0.x`, mesai saatleri) + gürültü + her güne 4 saldırı: `brute_force`, `password_spray`, `success_after_failures`, `off_hours_new_ip_login`.
+  - Dış IP'ler RFC 5737 bloklarından; saldırgan IP'leri gürültü havuzundan ayrı. Ground truth: `data/raw/synthetic_auth_labels.json`.
+  - 7 günlük örnek (2026-09-01, seed 42) üretildi ve yüklendi: 3589 satır → 1500 olay, 28 etiketli saldırı. Toplam 25 test geçiyor.
+  - H4 notu: `success_after_failures` saldırıları brute force kuralını da tetikler; doğruluk ölçümünde bu beklenen eşleşme sayılmalı.
+- Sıradaki: Seviye 2 (H2) — pipeline'ı `extract / transform / validate / load` adımlarına ayır, `rejected_events` + `pipeline_runs` tabloları, veri kalitesi kontrolleri (duplicate, null, invalid IP, timestamp, şema), üretece bozuk satır enjeksiyonu.
