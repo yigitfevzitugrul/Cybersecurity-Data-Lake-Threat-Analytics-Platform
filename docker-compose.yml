@@ -1,3 +1,30 @@
+x-airflow-common: &airflow-common
+  build: ./docker/airflow
+  image: secdl-airflow:2.10.5
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+    # Proje kodu (src/) DAG'lerden import edilebilsin.
+    PYTHONPATH: /opt/airflow/project
+    # src/utils/db.py bu değişkenleri okur; konteyner içinde Postgres'e servis adıyla ulaşılır.
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: ${POSTGRES_DB}
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/project/src
+    - ./sql:/opt/airflow/project/sql
+    - ./config:/opt/airflow/project/config
+    - ./data:/opt/airflow/project/data
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-depends
+    db-init:
+      condition: service_completed_successfully
+
 services:
   postgres:
     image: postgres:16
@@ -16,5 +43,105 @@ services:
       timeout: 3s
       retries: 10
 
+  # Tek seferlik: airflow veritabanını ve Grafana'nın salt-okunur rolünü oluşturur.
+  db-init:
+    image: postgres:16
+    container_name: secdl-db-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - ./docker/postgres/init.sql:/init/init.sql:ro
+    command:
+      - psql
+      - -v
+      - ON_ERROR_STOP=1
+      - -v
+      - grafana_user=${GRAFANA_DB_USER}
+      - -v
+      - grafana_password=${GRAFANA_DB_PASSWORD}
+      - -v
+      - app_db=${POSTGRES_DB}
+      - -f
+      - /init/init.sql
+
+  # Tek seferlik: Airflow metadata şemasını kurar ve yönetici kullanıcıyı oluşturur.
+  airflow-init:
+    <<: *airflow-common
+    container_name: secdl-airflow-init
+    environment:
+      <<: *airflow-env
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+    command:
+      - bash
+      - -c
+      - >-
+        airflow db migrate &&
+        airflow users create --username admin --password "$$AIRFLOW_ADMIN_PASSWORD"
+        --firstname Admin --lastname User --role Admin --email admin@example.com
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: secdl-airflow-scheduler
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: secdl-airflow-webserver
+    command: webserver
+    restart: unless-stopped
+    ports:
+      - "${AIRFLOW_PORT}:8080"
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: secdl-grafana
+    restart: unless-stopped
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # Provisioning dosyalarındaki $DEĞİŞKEN'ler buradan gelir.
+      POSTGRES_DB: ${POSTGRES_DB}
+      GRAFANA_DB_USER: ${GRAFANA_DB_USER}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD}
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
 volumes:
   pgdata:
+  airflow-logs:
+  grafana-data:
