@@ -94,4 +94,14 @@ dags/  grafana/  tests/  docs/
   - Grafana 11.6.0, provisioning `grafana/provisioning/`, dashboard `grafana/dashboards/pipeline_overview.json` ("Pipeline ve Veri Kalitesi", 10 panel). `grafana_ro` ile yazma denemesi "permission denied" veriyor (doğrulandı).
   - Testler: 63 test geçiyor. DAG, konteynerde elle ve zamanlanmış olarak çalıştırıldı; 3 task da success.
   - Manuel tetiklenen DAG o günün logunu üretir; günün ileri saatlerine ait olaylar Grafana'da "now"dan sonra kaldığı için gün bitene kadar görünmez (beklenen davranış).
-- Sıradaki: Seviye 4 (H4) — `config/detection_rules.yaml`, 4 tespit kuralı (`src/detection/`), `alerts` tablosu, DAG'e tespit adımı, güvenlik dashboard'u, etiketlere karşı doğruluk ölçümü (precision/recall) → MVP.
+- 2026-10-07: **Seviye 4 bitti → MVP tamam** ve doğrulandı:
+  - `src/detection/rules.py`: 4 saf fonksiyon kural (`brute_force`, `password_spray`, `suspicious_ip`, `auth_anomaly`); eşikler `config/detection_rules.yaml`. Oturum = aynı anahtarın, aralarında `window_minutes`'tan uzun boşluk olmayan olayları; oturum başına en fazla bir alarm.
+  - `src/detection/engine.py` (`python -m src.detection.engine [--reset]`): her çalıştırmada bütün `auth_events`'i yeniden değerlendirir, `alerts` tablosuna (`sql/schema/005_alerts.sql`) `alert_hash` ile upsert eder. Eşik değişince `--reset` gerekir. Veri büyürse lookback penceresi eklenmeli (şimdilik gerek yok).
+  - `auth_anomaly`: sebepler `success_after_failures` / `new_ip` / `off_hours`. Bilinen IP'den gelen `success_after_failures` `medium`, bilinmeyenden `critical`. Başarılı girişten sonra o IP'nin başarısızlık sayacı sıfırlanır.
+  - `src/detection/evaluate.py` (`python -m src.detection.evaluate`): `data/raw/*_labels.json` etiketlerine karşı recall (saldırı tipi başına, beklenen kuralla) ve precision (kural başına); rapor `data/curated/detection_evaluation.json`. Etiketsiz veri (Loghub) kapsam dışı.
+  - Üreteç `--hard-cases`: her güne `slow_brute_force` saldırısı (100.64.x.x, eşik altı) ve zararsız `forgotten_password` durumu (etikette `benign_lookalikes`). DAG bunu açık üretir.
+  - Sonuç (10 gün, 50 saldırı, 84 alarm): 4 temel saldırı tipinde recall %100, yavaş brute force %0; `brute_force` ve `auth_anomaly` precision %66,7, diğer ikisi %100; genel recall %80, precision %76,2; high/critical alarmlarda precision %100. Bunlar bilerek bırakılan, raporda tartışılacak sınırlar; eşikleri sonuca göre "ayarlayıp" %100'e çekme.
+  - DAG: `run_etl` sonrası `detect_threats` task'ı eklendi (konteynerde doğrulandı).
+  - Grafana: `grafana/dashboards/security_overview.json` ("Güvenlik: Tehdit Tespiti", 11 panel). Ekran görüntüleri `docs/screenshots/`.
+  - Testler: 92 test geçiyor.
+- Sıradaki: Seviye 5 (H5) — AWS: S3 raw/processed/curated (Parquet), IAM en az yetki, Glue, Athena, Budgets alarmı. **Başlamadan önce geliştiriciden gerekli:** AWS hesabı, bölge tercihi, CLI kimlik bilgilerinin (`aws configure`) geliştirici tarafından kurulması. Claude erişim anahtarı girmez/üretmez; maliyet doğuran kaynakları oluşturmadan önce sorar.

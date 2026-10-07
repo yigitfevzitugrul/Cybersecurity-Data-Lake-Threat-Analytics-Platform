@@ -1,11 +1,13 @@
-"""Günlük auth log ETL'i.
+"""Günlük auth log ETL'i ve tehdit tespiti.
 
-    generate_daily_log → run_etl → quality_gate
+    generate_daily_log → run_etl ─┬→ quality_gate
+                                  └→ detect_threats
 
 generate_daily_log gerçek bir log kaynağını taklit eder: çalıştırmanın mantıksal
 günü için sentetik bir log dosyası üretir. run_etl, data/raw altındaki henüz
-işlenmemiş tüm *.log dosyalarını pipeline'dan geçirir. İş mantığı src/ altında;
-bu dosya sadece zamanlama ve sıralamayı tanımlar.
+işlenmemiş tüm *.log dosyalarını pipeline'dan geçirir. detect_threats tespit
+kurallarını çalıştırıp alarmları yazar. İş mantığı src/ altında; bu dosya
+sadece zamanlama ve sıralamayı tanımlar.
 """
 from datetime import date, datetime, timedelta
 
@@ -19,7 +21,7 @@ SYNTHETIC_BAD_RATIO = 0.02
 
 @dag(
     dag_id="auth_log_etl",
-    description="Auth loglarını üretir, ETL'den geçirir ve veri kalitesini denetler",
+    description="Auth loglarını üretir, ETL'den geçirir, veri kalitesini denetler ve tehditleri tespit eder",
     schedule="@daily",
     start_date=datetime(2026, 10, 1),
     catchup=False,
@@ -36,7 +38,9 @@ def auth_log_etl():
         day = date.fromisoformat(ds)
         out = RAW_DIR / f"synthetic_auth_{ds}.log"
         # Seed güne bağlıdır: aynı gün tekrar üretilirse aynı dosya çıkar ve yeniden işlenmez.
-        lines, labels = generate(day, days=1, seed=day.toordinal(), bad_ratio=SYNTHETIC_BAD_RATIO)
+        lines, labels = generate(
+            day, days=1, seed=day.toordinal(), bad_ratio=SYNTHETIC_BAD_RATIO, hard_cases=True
+        )
         write_files(out, lines, labels)
         print(f"{out.name}: {len(lines)} satır, {len(labels['attacks'])} saldırı")
         return out.name
@@ -70,9 +74,23 @@ def auth_log_etl():
             # Veri sorunu tekrar denemekle düzelmez; retry yapılmaz.
             raise AirflowFailException("Veri kalitesi eşiği aşıldı: " + "; ".join(problems))
 
+    @task
+    def detect_threats() -> dict:
+        from src.detection.engine import load_config, run_detection
+        from src.utils.db import get_connection
+
+        conn = get_connection()
+        try:
+            summary = run_detection(conn, load_config())
+        finally:
+            conn.close()
+        print(summary)
+        return summary
+
     results = run_etl()
     generate_daily_log() >> results
     quality_gate(results)
+    results >> detect_threats()
 
 
 auth_log_etl()
