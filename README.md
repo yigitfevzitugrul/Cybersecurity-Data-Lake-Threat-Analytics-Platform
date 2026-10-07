@@ -2,7 +2,7 @@
 
 Security/auth loglarını toplayan, ETL'den geçiren, veri kalitesini kontrol eden, AWS Data Lake'te depolayan ve tehditleri tespit edip Grafana'da görselleştiren platform.
 
-> Durum: geliştirme aşamasında. Seviye 1 (temel pipeline) ve Seviye 2 (ETL + veri kalitesi) tamamlandı.
+> Durum: geliştirme aşamasında. Seviye 1 (temel pipeline), Seviye 2 (ETL + veri kalitesi) ve Seviye 3 (Docker Compose + Airflow + Grafana) tamamlandı.
 
 ## Pipeline
 
@@ -27,18 +27,48 @@ Aynı dosyayı (ya da örtüşen bir dosyayı) tekrar işlemek kayıt çoğaltma
 
 ## Kurulum
 
+Gereksinimler: Docker Desktop, Python 3.12.
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-Copy-Item .env.example .env   # POSTGRES_PASSWORD değerini değiştir
-docker compose up -d --wait
-python -m src.utils.db        # bağlantıyı test eder, şemayı uygular
+Copy-Item .env.example .env   # içindeki change_me değerlerini değiştir
+docker compose up -d --build --wait
+```
+
+| Servis | Adres | Giriş |
+|---|---|---|
+| Airflow | http://localhost:8080 | `admin` / `.env` içindeki `AIRFLOW_ADMIN_PASSWORD` |
+| Grafana | http://localhost:3000 | `admin` / `.env` içindeki `GRAFANA_ADMIN_PASSWORD` |
+| PostgreSQL | `localhost:5433` | `.env` içindeki `POSTGRES_USER` / `POSTGRES_PASSWORD` |
+
+Grafana veritabanına sadece `SELECT` yetkisi olan ayrı bir rolle (`grafana_ro`) bağlanır. Veri kaynağı ve dashboard'lar `grafana/` klasöründen otomatik yüklenir.
+
+![Pipeline ve Veri Kalitesi dashboard'u](docs/screenshots/grafana_pipeline_overview.jpg)
+
+## Airflow DAG'i
+
+`auth_log_etl` her gün çalışır:
+
+```
+generate_daily_log ──▶ run_etl ──▶ quality_gate
+```
+
+- `generate_daily_log`: gerçek bir log kaynağını taklit eder; o gün için gömülü saldırılar ve %2 bozuk satır içeren sentetik bir log üretir.
+- `run_etl`: `data/raw/` altındaki henüz işlenmemiş bütün `*.log` dosyalarını pipeline'dan geçirir. Bir dosyanın işlenip işlenmediğine içeriğinin SHA-256 özetine bakarak karar verir.
+- `quality_gate`: bir dosyada reddedilen satır oranı %10'u aşarsa DAG'i başarısız sayar.
+
+DAG ilk kurulumda duraklatılmış gelir. Arayüzden açabilir ya da komut satırından tetikleyebilirsin:
+
+```powershell
+docker compose exec airflow-scheduler airflow dags unpause auth_log_etl
+docker compose exec airflow-scheduler airflow dags trigger auth_log_etl
 ```
 
 ## Kullanım
 
-Gerçek veri: [Loghub OpenSSH_2k.log](https://github.com/logpai/loghub/tree/master/OpenSSH) dosyasını `data/raw/` altına koy. Syslog satırında yıl olmadığı için `--year` zorunludur.
+Gerçek veri: [Loghub OpenSSH_2k.log](https://github.com/logpai/loghub/tree/master/OpenSSH) dosyasını `data/raw/` altına koy. Syslog satırında yıl yoktur; `--year` verilmezse dosyanın değişiklik tarihinden tahmin edilir.
 
 ```powershell
 python -m src.etl.pipeline data/raw/OpenSSH_2k.log --year 2025

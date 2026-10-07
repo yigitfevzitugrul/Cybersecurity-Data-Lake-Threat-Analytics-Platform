@@ -1,0 +1,17 @@
+apiVersion: 1
+
+datasources:
+  - name: SecurityLake
+    uid: secdl-postgres
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: postgres:5432
+    user: $GRAFANA_DB_USER
+    isDefault: true
+    editable: false
+    jsonData:
+      database: $POSTGRES_DB
+      sslmode: disable
+      postgresVersion: 1600
+    secureJsonData:
+      password: $GRAFANA_DB_PASSWORD

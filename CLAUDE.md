@@ -84,4 +84,14 @@ dags/  grafana/  tests/  docs/
   - Üreteç: `--bad-ratio` ile 6 türde bozuk satır ekler; temiz satırlar ve saldırı etiketleri değişmez. Etiket dosyasında `injected_bad_lines`.
   - Testler: 56 test geçiyor. DB testleri `tests/conftest.py` içindeki `db_conn` fixture'ı ile geçici şemada çalışır.
   - Geliştirme DB'si sıfırlanıp pipeline ile yeniden yüklendi: Loghub 525 olay / 0 red; sentetik (7 gün, seed 42, bad-ratio 0.02) 1500 olay / 72 red.
-- Sıradaki: Seviye 3 (H3) — Airflow + Grafana'yı `docker-compose.yml`'a ekle, pipeline'ı çalıştıran DAG, ilk Grafana dashboard'u (PostgreSQL veri kaynağı).
+- Commit mesajlarına `Co-Authored-By: Claude` satırı eklenmez (geliştirici tercihi). Geçmişi yeniden yazma / force push Claude tarafından yapılamıyor; gerekirse komut geliştiriciye verilir.
+- 2026-10-07: **Seviye 3 bitti** ve doğrulandı:
+  - `docker compose up -d --build --wait` → `postgres`, `db-init` (tek seferlik: `airflow` veritabanı + salt-okunur `grafana_ro` rolü, `docker/postgres/init.sql`), `airflow-init`, `airflow-scheduler`, `airflow-webserver` (:8080), `grafana` (:3000). Parolalar `.env`'de (`AIRFLOW_ADMIN_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` vb.).
+  - Airflow 2.10.5 (LocalExecutor), imaj `docker/airflow/Dockerfile`. Metadata aynı Postgres'te ayrı `airflow` veritabanında. `src/`, `sql/`, `config/`, `data/` konteynere `/opt/airflow/project` altına bağlanır (`PYTHONPATH`).
+  - DAG `dags/auth_log_etl.py` (@daily, UTC): `generate_daily_log` (o günün sentetik logu, seed = tarih, %2 bozuk satır) → `run_etl` (`process_new_files`: `data/raw/*.log` içinden SHA-256'sı başarıyla işlenmemiş olanlar) → `quality_gate` (red oranı > %10 ise fail).
+  - Airflow saat dilimi UTC bırakıldı: Europe/Istanbul iken `ds` bir gün geri kayıyordu.
+  - `--year` artık opsiyonel: `infer_year` yılı dosyanın değişiklik tarihinden tahmin eder (Loghub → 2025). Bir yıldan eski veya yıl sınırını aşan dosyada elle verilmeli.
+  - Grafana 11.6.0, provisioning `grafana/provisioning/`, dashboard `grafana/dashboards/pipeline_overview.json` ("Pipeline ve Veri Kalitesi", 10 panel). `grafana_ro` ile yazma denemesi "permission denied" veriyor (doğrulandı).
+  - Testler: 63 test geçiyor. DAG, konteynerde elle ve zamanlanmış olarak çalıştırıldı; 3 task da success.
+  - Manuel tetiklenen DAG o günün logunu üretir; günün ileri saatlerine ait olaylar Grafana'da "now"dan sonra kaldığı için gün bitene kadar görünmez (beklenen davranış).
+- Sıradaki: Seviye 4 (H4) — `config/detection_rules.yaml`, 4 tespit kuralı (`src/detection/`), `alerts` tablosu, DAG'e tespit adımı, güvenlik dashboard'u, etiketlere karşı doğruluk ölçümü (precision/recall) → MVP.
