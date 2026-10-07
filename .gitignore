@@ -1,0 +1,24 @@
+# Sırlar
+.env
+
+# Veri katmanları (sadece klasör iskeleti git'e girer)
+data/raw/*
+data/processed/*
+data/curated/*
+!data/**/.gitkeep
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Airflow / loglar
+logs/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.claude/settings.local.json
