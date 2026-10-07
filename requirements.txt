@@ -1,5 +1,8 @@
-# Seviye 1 bağımlılıkları. Yeni seviyelerde ihtiyaç oldukça eklenecek.
+# Yeni seviyelerde ihtiyaç oldukça eklenecek.
 psycopg2-binary==2.9.13
 python-dotenv==1.2.4
 PyYAML==6.0.3
 pytest==9.1.1
+# Seviye 5: AWS Data Lake
+boto3==1.43.108
+pyarrow==25.0.1
