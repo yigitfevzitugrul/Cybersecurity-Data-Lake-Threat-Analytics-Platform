@@ -3,18 +3,19 @@
 Her satır için üç sonuç mümkündür:
   - AuthEvent : bir kimlik doğrulama denemesi (başarılı / başarısız giriş)
   - None      : geçerli ama bizi ilgilendirmeyen satır (pam, disconnect vb.)
-  - ParseError: syslog formatına uymayan bozuk satır (ileride karantinaya gider)
+  - ParseError: bozuk satır (karantinaya gider)
 """
-import argparse
 import re
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import Iterator, Optional, Union
+from typing import Optional
 
 LOGIN_FAILED = "login_failed"
 LOGIN_SUCCESS = "login_success"
+
+# ParseError red sebepleri
+MALFORMED_LINE = "malformed_line"
+INVALID_TIMESTAMP = "invalid_timestamp"
 
 # Örn: "Dec 10 06:55:48 LabSZ sshd[24200]: <mesaj>"
 HEADER_RE = re.compile(
@@ -32,12 +33,19 @@ AUTH_RE = re.compile(
     r"from (?P<ip>\S+) port (?P<port>\d+) ssh2(?:: .*)?$"
 )
 
+# Auth satırı gibi başlayıp AUTH_RE'ye uymayan satır yarım / bozuk demektir.
+AUTH_PREFIX_RE = re.compile(r"^(?:Failed|Accepted) \S+ for ")
+
 # Örn: "message repeated 5 times: [ Failed password for root from ... ssh2]"
 REPEATED_RE = re.compile(r"^message repeated (?P<count>\d+) times: \[ (?P<inner>.*)\]$")
 
 
 class ParseError(ValueError):
-    """Satır beklenen syslog formatında değil."""
+    """Satır ayrıştırılamadı. `reason` karantinadaki red sebebi kodudur."""
+
+    def __init__(self, reason: str, detail: str):
+        super().__init__(detail)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -60,7 +68,7 @@ def parse_line(line: str, year: int) -> Optional[AuthEvent]:
     line = line.rstrip("\r\n")
     header = HEADER_RE.match(line)
     if header is None:
-        raise ParseError("syslog başlığı eşleşmedi")
+        raise ParseError(MALFORMED_LINE, "syslog başlığı eşleşmedi")
 
     try:
         event_time = datetime.strptime(
@@ -68,7 +76,7 @@ def parse_line(line: str, year: int) -> Optional[AuthEvent]:
             "%Y %b %d %H:%M:%S",
         )
     except ValueError as exc:
-        raise ParseError(f"geçersiz zaman damgası: {exc}") from exc
+        raise ParseError(INVALID_TIMESTAMP, str(exc)) from exc
 
     if header["process"] != "sshd":
         return None
@@ -82,6 +90,8 @@ def parse_line(line: str, year: int) -> Optional[AuthEvent]:
 
     auth = AUTH_RE.match(message)
     if auth is None:
+        if AUTH_PREFIX_RE.match(message):
+            raise ParseError(MALFORMED_LINE, "auth satırı eksik veya bozuk")
         return None
 
     return AuthEvent(
@@ -97,52 +107,3 @@ def parse_line(line: str, year: int) -> Optional[AuthEvent]:
         repeat_count=repeat_count,
         raw_line=line,
     )
-
-
-def parse_file(
-    path: Union[str, Path], year: int
-) -> Iterator[tuple[int, str, Union[AuthEvent, ParseError, None]]]:
-    """Dosyayı satır satır okur; (satır_no, ham_satır, sonuç) üretir. Boş satırlar atlanır."""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line_no, line in enumerate(f, start=1):
-            line = line.rstrip("\r\n")
-            if not line.strip():
-                continue
-            try:
-                yield line_no, line, parse_line(line, year)
-            except ParseError as exc:
-                yield line_no, line, exc
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser(description="Auth log dosyasını ayrıştırıp özet basar.")
-    ap.add_argument("path")
-    ap.add_argument("--year", type=int, default=datetime.now().year)
-    args = ap.parse_args()
-
-    total = skipped = 0
-    errors = []
-    by_type = Counter()
-    attempts = Counter()
-    for line_no, _, result in parse_file(args.path, args.year):
-        total += 1
-        if result is None:
-            skipped += 1
-        elif isinstance(result, ParseError):
-            errors.append((line_no, str(result)))
-        else:
-            by_type[result.event_type] += 1
-            attempts[result.event_type] += result.repeat_count
-
-    print(f"Toplam satır       : {total}")
-    print(f"Auth olayı         : {sum(by_type.values())}")
-    for event_type in sorted(by_type):
-        print(f"  {event_type:<15}: {by_type[event_type]} satır, {attempts[event_type]} deneme")
-    print(f"İlgisiz (atlanan)  : {skipped}")
-    print(f"Bozuk satır        : {len(errors)}")
-    for line_no, reason in errors[:10]:
-        print(f"  satır {line_no}: {reason}")
-
-
-if __name__ == "__main__":
-    main()

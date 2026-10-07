@@ -60,7 +60,7 @@ dags/  grafana/  tests/  docs/
 - Ortam: Python 3.12.4, Docker 29.6.1 + Compose v5.1.4, Git 2.45.2, WSL2.
 - Makinede 5432'de yerel bir PostgreSQL çalışıyor; proje konteyneri host'ta **5433** portunu kullanır.
 - Veri kaynağı planı (Loghub OpenSSH + sentetik üreteç) onaylandı.
-- Git: commit/push'ları geliştirici manuel yapar. Claude git komutu çalıştırmaz, sadece commit noktalarında komut önerir. Git dışındaki her şeyi (indirmeler dahil) sormadan yapıp kendisi doğrular; sadece kritik durumlarda sorar.
+- Git: 2026-10-07'den itibaren commit ve push'ları Claude yapar (`origin master`, repo: github.com/yigitfevzitugrul/Cybersecurity-Data-Lake-Threat-Analytics-Platform). Commit mesajları İngilizce. Kritik durumlar dışında soru sorulmaz; indirmeler dahil her şey sormadan yapılıp doğrulanır.
 - 2026-10-07: Seviye 1 / Aşama 3–4 tamamlandı ve doğrulandı:
   - `data/raw/OpenSSH_2k.log` indirildi (Loghub, 2000 satır, tamamı "Dec 10"; yıl bilinmediği için `--year 2025` ile yüklendi).
   - `src/etl/parser.py`: satır → `AuthEvent` | `None` (ilgisiz) | `ParseError` (bozuk). Sadece `Failed/Accepted <method> for ...` satırları olay sayılır; pam/Invalid user/disconnect satırları aynı denemenin tekrarı olduğu için atlanır.
@@ -73,4 +73,15 @@ dags/  grafana/  tests/  docs/
   - Dış IP'ler RFC 5737 bloklarından; saldırgan IP'leri gürültü havuzundan ayrı. Ground truth: `data/raw/synthetic_auth_labels.json`.
   - 7 günlük örnek (2026-09-01, seed 42) üretildi ve yüklendi: 3589 satır → 1500 olay, 28 etiketli saldırı. Toplam 25 test geçiyor.
   - H4 notu: `success_after_failures` saldırıları brute force kuralını da tetikler; doğruluk ölçümünde bu beklenen eşleşme sayılmalı.
-- Sıradaki: Seviye 2 (H2) — pipeline'ı `extract / transform / validate / load` adımlarına ayır, `rejected_events` + `pipeline_runs` tabloları, veri kalitesi kontrolleri (duplicate, null, invalid IP, timestamp, şema), üretece bozuk satır enjeksiyonu.
+- 2026-10-07: **Seviye 2 bitti** ve doğrulandı:
+  - `python -m src.etl.pipeline <dosya> --year <yıl>`: `extract.py` → `transform.py` (+`parser.py`) → `validate.py` → `load.py`. Eski `python -m src.etl.load` ve `python -m src.etl.parser` CLI'ları kaldırıldı.
+  - Şema: `002_pipeline_runs.sql`, `003_rejected_events.sql`, `004_auth_events_run_id.sql` (`auth_events.run_id` lineage).
+  - Red sebepleri: `malformed_line`, `invalid_timestamp`, `missing_field`, `schema_error`, `invalid_ip`, `invalid_port`, `duplicate`. Auth satırı gibi başlayıp yarım kalan satır artık "ilgisiz" değil `malformed_line`.
+  - Dosya içi kopyalar `duplicate` olarak karantinaya gider; veritabanında zaten olan olaylar reddedilmez, `events_skipped_existing` olarak sayılır.
+  - Olaylar + karantina + çalıştırma kaydı tek transaction; hata olursa hiçbiri yazılmaz, run `failed` olur.
+  - Değişmez: `lines_read = lines_irrelevant + lines_rejected + events_valid`, `events_valid = events_loaded + events_skipped_existing`.
+  - Processed katmanı: `data/processed/<dosya>.jsonl` (H5'te Parquet/S3'e taşınacak).
+  - Üreteç: `--bad-ratio` ile 6 türde bozuk satır ekler; temiz satırlar ve saldırı etiketleri değişmez. Etiket dosyasında `injected_bad_lines`.
+  - Testler: 56 test geçiyor. DB testleri `tests/conftest.py` içindeki `db_conn` fixture'ı ile geçici şemada çalışır.
+  - Geliştirme DB'si sıfırlanıp pipeline ile yeniden yüklendi: Loghub 525 olay / 0 red; sentetik (7 gün, seed 42, bad-ratio 0.02) 1500 olay / 72 red.
+- Sıradaki: Seviye 3 (H3) — Airflow + Grafana'yı `docker-compose.yml`'a ekle, pipeline'ı çalıştıran DAG, ilk Grafana dashboard'u (PostgreSQL veri kaynağı).

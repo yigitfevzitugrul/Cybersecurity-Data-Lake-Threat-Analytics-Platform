@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from src.etl.parser import LOGIN_FAILED, LOGIN_SUCCESS, ParseError, parse_file, parse_line
+from src.etl.parser import LOGIN_FAILED, LOGIN_SUCCESS, ParseError, parse_line
 
 YEAR = 2024
 
@@ -112,18 +112,16 @@ def test_malformed_lines_raise(line):
     with pytest.raises(ParseError):
         parse_line(line, YEAR)
 
+def test_truncated_auth_line_is_malformed_not_irrelevant():
+    with pytest.raises(ParseError) as exc:
+        parse_line("Dec 10 08:00:00 LabSZ sshd[1]: Failed password for root from", YEAR)
+    assert exc.value.reason == "malformed_line"
 
-def test_parse_file_reports_all_outcomes(tmp_path):
-    log = tmp_path / "auth.log"
-    log.write_text(
-        "Dec 10 07:13:43 LabSZ sshd[24227]: Failed password for root from 5.36.59.76 port 42393 ssh2\n"
-        "\n"
-        "Dec 10 06:55:48 LabSZ sshd[24200]: Connection closed by 173.234.31.186 [preauth]\n"
-        "bozuk satir\n",
-        encoding="utf-8",
-    )
-    results = list(parse_file(log, YEAR))
-    assert [line_no for line_no, _, _ in results] == [1, 3, 4]
-    assert results[0][2].event_type == LOGIN_FAILED
-    assert results[1][2] is None
-    assert isinstance(results[2][2], ParseError)
+
+def test_parse_error_reason_codes():
+    with pytest.raises(ParseError) as exc:
+        parse_line("tamamen bozuk bir satir", YEAR)
+    assert exc.value.reason == "malformed_line"
+    with pytest.raises(ParseError) as exc:
+        parse_line("Feb 30 10:00:00 LabSZ sshd[1]: Failed password for root from 1.2.3.4 port 22 ssh2", YEAR)
+    assert exc.value.reason == "invalid_timestamp"
