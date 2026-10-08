@@ -1,18 +1,22 @@
 """Günlük auth log ETL'i ve tehdit tespiti.
 
     generate_daily_log → run_etl ─┬→ quality_gate
-                                  └→ detect_threats
+                                  └→ detect_threats → sync_to_cloud → reconcile_cloud
 
 generate_daily_log gerçek bir log kaynağını taklit eder: çalıştırmanın mantıksal
 günü için sentetik bir log dosyası üretir. run_etl, data/raw altındaki henüz
 işlenmemiş tüm *.log dosyalarını pipeline'dan geçirir. detect_threats tespit
-kurallarını çalıştırıp alarmları yazar. İş mantığı src/ altında; bu dosya
-sadece zamanlama ve sıralamayı tanımlar.
+kurallarını çalıştırıp alarmları yazar. sync_to_cloud katmanları S3'e gönderir,
+reconcile_cloud yerel veritabanı ile Athena'nın aynı sayıları verdiğini doğrular.
+Bulut adımları sadece CLOUD_SYNC_ENABLED=true iken çalışır (docker-compose.cloud.yml);
+aksi halde atlanır. İş mantığı src/ altında; bu dosya sadece zamanlama ve
+sıralamayı tanımlar.
 """
+import os
 from datetime import date, datetime, timedelta
 
 from airflow.decorators import dag, task
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowSkipException
 
 # Bir dosyada reddedilen satır oranı bunu aşarsa DAG başarısız olur.
 MAX_REJECT_RATIO = 0.10
@@ -27,7 +31,7 @@ SYNTHETIC_BAD_RATIO = 0.02
     catchup=False,
     max_active_runs=1,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
-    tags=["etl", "security"],
+    tags=["etl", "security", "cloud"],
 )
 def auth_log_etl():
     @task
@@ -87,10 +91,48 @@ def auth_log_etl():
         print(summary)
         return summary
 
+    def require_cloud() -> None:
+        if os.environ.get("CLOUD_SYNC_ENABLED", "").lower() != "true":
+            raise AirflowSkipException("Bulut senkronu kapalı (CLOUD_SYNC_ENABLED != true).")
+
+    @task
+    def sync_to_cloud() -> dict:
+        require_cloud()
+        from src.cloud.config import load_config
+        from src.cloud.sync import sync_all
+        from src.utils.db import get_connection
+
+        conn = get_connection()
+        try:
+            result = sync_all(load_config(), conn)
+        finally:
+            conn.close()
+        print(result)
+        return result
+
+    @task
+    def reconcile_cloud() -> list[dict]:
+        require_cloud()
+        from src.cloud.config import load_config, pipeline_session
+        from src.cloud.reconcile import format_results, reconcile
+        from src.utils.db import get_connection
+
+        cfg = load_config()
+        conn = get_connection()
+        try:
+            results = reconcile(conn, pipeline_session(cfg).client("athena"), cfg)
+        finally:
+            conn.close()
+        print(format_results(results))
+        mismatches = [r["table"] for r in results if not r["match"]]
+        if mismatches:
+            raise AirflowFailException("Yerel veritabanı ve data lake tutarsız: " + ", ".join(mismatches))
+        return results
+
     results = run_etl()
     generate_daily_log() >> results
     quality_gate(results)
-    results >> detect_threats()
+    results >> detect_threats() >> sync_to_cloud() >> reconcile_cloud()
 
 
 auth_log_etl()

@@ -1,0 +1,28 @@
+# İsteğe bağlı: Airflow DAG'inin veriyi AWS data lake'e de göndermesini sağlar.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --wait
+#
+# Varsayılan kurulumda (sadece docker-compose.yml) konteynerlerde AWS kimliği
+# bulunmaz ve DAG'in bulut adımları atlanır.
+#
+# Bu dosya makinedeki AWS CLI ayarlarını (~/.aws) Airflow konteynerlerine
+# salt-okunur bağlar. Konteyner o kimlikle sadece en az yetkili pipeline rolünü
+# üstlenir (AWS_PIPELINE_ROLE_ARN); yeni erişim anahtarı üretilmez.
+
+x-cloud: &cloud
+  environment:
+    CLOUD_SYNC_ENABLED: "true"
+    AWS_REGION: ${AWS_REGION}
+    AWS_DEFAULT_REGION: ${AWS_REGION}
+    S3_BUCKET: ${S3_BUCKET}
+    GLUE_DATABASE: ${GLUE_DATABASE}
+    ATHENA_WORKGROUP: ${ATHENA_WORKGROUP}
+    AWS_PIPELINE_ROLE_ARN: ${AWS_PIPELINE_ROLE_ARN}
+  volumes:
+    - ${AWS_CONFIG_DIR:-~/.aws}:/home/airflow/.aws:ro
+
+services:
+  airflow-scheduler:
+    <<: *cloud
+  airflow-webserver:
+    <<: *cloud
