@@ -125,4 +125,5 @@ dags/  grafana/  tests/  docs/
   - Testler: 105 test geçiyor.
   - PySpark (opsiyonel) yapılmadı; kod dondurma etiketi (`v1.0.0`) bulut akışı canlı doğrulanana kadar atılmadı.
 - Docker Desktop notu: 2026-10-08'de komut satırından başlatılınca motor 10 dakikada hazır olmadı; geliştirici elle açınca çalıştı. Docker kapalıysa geliştiriciden açmasını iste.
-- Sıradaki: (1) geliştirici onaylarsa bucket'ı geri kurup bulut akışını DAG üzerinden canlı doğrula, `v1.0.0` etiketi; (2) H7–8: rapor, sunum, demo videosu; (3) opsiyonel PySpark.
+- 2026-10-08 karar: bucket sunumdan hemen önce (Ocak 2027) geri kurulacak; o zamana kadar AWS tarafında işlem yapılmaz. O gün yapılacaklar: `python -m src.cloud.setup` → `python -m src.cloud.sync` → servisleri `docker-compose.cloud.yml` ile başlatıp DAG'i bir kez çalıştır (`sync_to_cloud` + `reconcile_cloud` success olmalı) → `python -m src.cloud.verify_access` → `v1.0.0` etiketi. Sunumdan sonra bucket'ı geliştirici siler.
+- Sıradaki: H7–8 — rapor, sunum, demo videosu. PySpark opsiyonel, önerilmiyor.
