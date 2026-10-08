@@ -1,8 +1,56 @@
 # Cybersecurity Data Lake & Threat Analytics Platform
 
-Security/auth loglarını toplayan, ETL'den geçiren, veri kalitesini kontrol eden, AWS Data Lake'te depolayan ve tehditleri tespit edip Grafana'da görselleştiren platform.
+[![tests](https://github.com/yigitfevzitugrul/Cybersecurity-Data-Lake-Threat-Analytics-Platform/actions/workflows/tests.yml/badge.svg)](https://github.com/yigitfevzitugrul/Cybersecurity-Data-Lake-Threat-Analytics-Platform/actions/workflows/tests.yml)
 
-> Durum: Seviye 1–5 tamamlandı (pipeline, ETL + veri kalitesi, Docker Compose + Airflow + Grafana, tehdit tespiti, AWS Data Lake). Sırada bulut akışının DAG'e bağlanması var.
+SSH kimlik doğrulama loglarını toplayan, ETL'den geçiren, veri kalitesini denetleyen, tehditleri kural tabanlı olarak tespit eden, sonuçları Grafana'da gösteren ve veriyi AWS üzerinde bir data lake'e taşıyan uçtan uca bir veri mühendisliği projesi.
+
+Bilişim Sistemleri Mühendisliği bitirme projesi olarak geliştirilmiştir.
+
+## Mimari
+
+```mermaid
+flowchart LR
+    subgraph Kaynak
+        L[Loghub OpenSSH<br/>gerçek loglar]
+        G[Sentetik üreteç<br/>etiketli saldırılar]
+    end
+    subgraph Yerel["Yerel (Docker Compose)"]
+        A[Airflow DAG]
+        E[ETL<br/>extract → transform<br/>→ validate → load]
+        P[(PostgreSQL<br/>auth_events<br/>rejected_events<br/>pipeline_runs<br/>alerts)]
+        D[Tespit kuralları]
+        F[Grafana]
+    end
+    subgraph AWS["AWS (isteğe bağlı)"]
+        S[(S3<br/>raw / processed / curated)]
+        C[Glue Data Catalog]
+        Q[Athena]
+    end
+    L --> E
+    G --> E
+    A -. zamanlar .-> E
+    E --> P
+    P --> D --> P
+    P --> F
+    P -- Parquet --> S
+    S --- C --- Q
+```
+
+| Katman | Teknoloji |
+|---|---|
+| Dil ve test | Python 3.12, pytest (105 test), GitHub Actions |
+| Depolama | PostgreSQL 16; S3 üzerinde Parquet |
+| Orkestrasyon | Apache Airflow 2.10 |
+| Görselleştirme | Grafana 11 (kod olarak tanımlı veri kaynağı ve dashboard'lar) |
+| Bulut | AWS S3, Glue Data Catalog, Athena, IAM, Budgets (boto3) |
+| Çalışma ortamı | Docker Compose |
+
+Öne çıkanlar:
+
+- **Idempotent pipeline:** aynı ya da örtüşen bir dosyayı tekrar işlemek kayıt çoğaltmaz; hata olursa hiçbir şey yüklenmez.
+- **Veri kalitesi:** yedi farklı red sebebi, karantina tablosu ve her çalıştırma için denetim kaydı.
+- **Ölçülebilir tespit:** sentetik üreteç saldırıları etiketlediği için kuralların precision ve recall değerleri hesaplanır; sınırları açıkça raporlanır.
+- **En az yetki:** Grafana salt-okunur bir veritabanı rolüyle, bulut pipeline'ı kalıcı anahtarı olmayan dar yetkili bir IAM rolüyle çalışır.
 
 ## Pipeline
 
@@ -54,13 +102,14 @@ Grafana veritabanına sadece `SELECT` yetkisi olan ayrı bir rolle (`grafana_ro`
 
 ```
 generate_daily_log ──▶ run_etl ──┬──▶ quality_gate
-                                 └──▶ detect_threats
+                                 └──▶ detect_threats ──▶ sync_to_cloud ──▶ reconcile_cloud
 ```
 
 - `generate_daily_log`: gerçek bir log kaynağını taklit eder; o gün için gömülü saldırılar ve %2 bozuk satır içeren sentetik bir log üretir.
 - `run_etl`: `data/raw/` altındaki henüz işlenmemiş bütün `*.log` dosyalarını pipeline'dan geçirir. Bir dosyanın işlenip işlenmediğine içeriğinin SHA-256 özetine bakarak karar verir.
 - `quality_gate`: bir dosyada reddedilen satır oranı %10'u aşarsa DAG'i başarısız sayar.
 - `detect_threats`: tespit kurallarını çalıştırır ve alarmları `alerts` tablosuna yazar.
+- `sync_to_cloud` ve `reconcile_cloud`: katmanları S3'e gönderir, ardından yerel veritabanı ile Athena'nın aynı satır sayılarını verdiğini doğrular. Varsayılan kurulumda bu iki adım atlanır; bkz. [DAG'den buluta gönderme](#dagden-buluta-gönderme).
 
 DAG ilk kurulumda duraklatılmış gelir. Arayüzden açabilir ya da komut satırından tetikleyebilirsin:
 
@@ -148,11 +197,22 @@ python -m src.cloud.setup          # altyapıyı kurar; çıktıdaki rol ARN'ın
 python -m src.cloud.sync           # raw / processed / curated katmanlarını S3'e gönderir
 python -m src.cloud.athena sql/athena/01_lake_analysis.sql
 python -m src.cloud.verify_access  # rolün en az yetkiyle çalıştığını canlı doğrular
+python -m src.cloud.reconcile      # yerel veritabanı ile Athena'yı karşılaştırır
 ```
 
 `setup` ve `sync` tekrar çalıştırılabilir: var olan kaynaklar güncellenir, içeriği değişmemiş nesneler yeniden yüklenmez.
 
-Maliyet: bu veri boyutunda (yaklaşık 1 MB) S3, Glue kataloğu ve Athena sorguları pratikte ücretsizdir; örnek analiz dosyasının tamamı 17 KB veri tarar.
+Maliyet: bu veri boyutunda (yaklaşık 1 MB) S3, Glue kataloğu ve Athena sorguları pratikte ücretsizdir; örnek analiz dosyasının tamamı 17 KB veri tarar. Bucket kullanılmadığı dönemde silinebilir; `setup` ve `sync` ile birkaç dakikada yeniden oluşturulur.
+
+### DAG'den buluta gönderme
+
+Varsayılan kurulumda konteynerlerde AWS kimliği bulunmaz ve DAG'in bulut adımları atlanır. Açmak için servisleri ek dosyayla başlat:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --wait
+```
+
+[docker-compose.cloud.yml](docker-compose.cloud.yml), makinedeki `~/.aws` klasörünü Airflow konteynerlerine salt-okunur bağlar. DAG bu kimlikle yalnızca en az yetkili pipeline rolünü üstlenir. Kapatmak için servisleri ek dosya olmadan yeniden başlatmak yeterlidir.
 
 Kaynakları kaldırmak için:
 
@@ -193,4 +253,30 @@ cmd /c "docker compose exec -T postgres psql -U secdl -d security_lake < sql\ana
 python -m pytest -q
 ```
 
-Veritabanı testleri geçici bir şemada çalışır ve geliştirme verisine dokunmaz; PostgreSQL kapalıysa atlanır.
+Veritabanı testleri geçici bir şemada çalışır ve geliştirme verisine dokunmaz; PostgreSQL kapalıysa atlanır. Bulut testleri AWS'ye bağlanmaz. Aynı testler her push'ta GitHub Actions üzerinde, gerçek bir PostgreSQL servisiyle çalışır.
+
+## Proje yapısı
+
+```
+config/detection_rules.yaml    tespit kurallarının eşikleri
+dags/auth_log_etl.py           Airflow DAG'i
+docker/                        Airflow imajı ve veritabanı ilk kurulum betiği
+grafana/                       veri kaynağı ve dashboard tanımları
+infra/iam/                     pipeline rolünün IAM politikası
+sql/schema/                    tablo tanımları (sırayla uygulanır)
+sql/analysis/, sql/athena/     PostgreSQL ve Athena analiz sorguları
+src/generator/                 sentetik log üreteci
+src/etl/                       extract, parser, transform, validate, load, pipeline
+src/detection/                 kurallar, tespit motoru, doğruluk ölçümü
+src/cloud/                     AWS kurulumu, S3 senkronu, Athena, tutarlılık kontrolü
+tests/                         pytest testleri
+data/{raw,processed,curated}/  yerel veri katmanları (git'e girmez)
+```
+
+## Bilinen sınırlar
+
+- Tespit kural tabanlıdır: eşiklerin altında kalan yavaş saldırıları kaçırır, şifresini unutan kullanıcıyı saldırıdan ayıramaz (bkz. [Doğruluk ölçümü](#doğruluk-ölçümü)).
+- Tespit her çalıştırmada bütün olayları yeniden değerlendirir. Bu veri boyutunda sorun değildir; veri büyüdüğünde geriye bakış penceresi gerekir.
+- Syslog satırlarında yıl yoktur. Yıl dosya tarihinden tahmin edilir; bir yıldan eski ya da yıl sınırını aşan dosyalarda `--year` elle verilmelidir.
+- Yalnızca OpenSSH `Failed` / `Accepted` satırları olay sayılır; diğer servislerin logları kapsam dışıdır.
+- Doğruluk sonuçları sentetik veriye aittir. Gerçek Loghub verisinin etiketi olmadığı için ölçüme girmez.

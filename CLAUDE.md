@@ -115,4 +115,14 @@ dags/  grafana/  tests/  docs/
   - Testler: 102 test geçiyor (bulut testleri AWS'ye bağlanmaz).
 - 2026-10-07 (maliyet): Geliştirici ücret ödemek istemiyor; proje ~3 ay sonra (Ocak 2027) sunulacak. Proje kaynakları bilerek silinmedi çünkü boşta maliyetleri pratikte sıfır (S3'te ~1,2 MB; Glue kataloğu, Athena workgroup, IAM rolü ve bütçe ücretsiz; Athena sadece sorgu çalışınca ücretlenir; crawler/job yok). Bulut senkronu DAG'e bağlı değil, yani kendiliğinden veri yüklenmez. **Maliyet doğuran yeni bir AWS kaynağı (crawler, Glue job, EMR, EC2, NAT vb.) eklemeden önce mutlaka sor.** Hesapta bu projeye ait olmayan, önceden var olan kaynaklar da var (AWS Config kaydedicisi açık, durdurulmuş bir t3.micro + 8 GB disk); bunlara dokunulmadı, geliştiriciye bildirildi.
 - 2026-10-07: Gün sonunda yerel Docker servisleri `docker compose stop` ile durduruldu (veri volume'larda duruyor). Devam ederken: `docker compose up -d --wait`.
-- Sıradaki: Seviye 6 (H6) — bulut senkronunu DAG'e ekle (Airflow konteynerine AWS kimliği güvenli biçimde nasıl verilecek kararı gerekli: salt-okunur `~/.aws` bağlama ya da ortam değişkeni), uçtan uca bulut akışı, opsiyonel PySpark, README son hali, kod dondurma.
+- 2026-10-08: Geliştirici AWS Config kaydedicisini durdurdu, t3.micro sunucuyu sildi . **Hesaptaki S3 bucket'ları (proje bucket'ı dahil) artık yok** (Claude silmedi; büyük olasılıkla geliştirici maliyet için sildi). Glue veritabanı, Athena workgroup, IAM rolü ve bütçe duruyor. Bucket olmadan `sync` / Athena / `reconcile` çalışmaz ("Unable to verify/create output bucket"). Geri kurmak: `python -m src.cloud.setup` + `python -m src.cloud.sync` — **bucket'ı geliştiriciye sormadan yeniden oluşturma.**
+- 2026-10-08: **Seviye 6 (kısmen doğrulandı):**
+  - `src/cloud/reconcile.py` (`python -m src.cloud.reconcile`): `auth_events`, `alerts`, `daily_ip_summary` için satır sayısı + kontrol toplamını PostgreSQL ve Athena'da karşılaştırır.
+  - DAG'e `sync_to_cloud` → `reconcile_cloud` eklendi; yalnızca `CLOUD_SYNC_ENABLED=true` iken çalışır, aksi halde `skipped`. Varsayılan kurulumda atlandığı konteynerde doğrulandı (run `verify_cloud_skip_1`).
+  - `docker-compose.cloud.yml`: isteğe bağlı ek dosya; `~/.aws`'yi Airflow konteynerlerine salt-okunur bağlar ve bulut adımlarını açar. `docker compose config` ile geçerli; **bucket silindiği için canlı çalıştırılamadı** — sunumdan önce bucket geri kurulunca doğrulanmalı.
+  - `.github/workflows/tests.yml`: her push'ta PostgreSQL servisiyle pytest.
+  - README son hali: mimari (mermaid), teknoloji tablosu, proje yapısı, bilinen sınırlar.
+  - Testler: 105 test geçiyor.
+  - PySpark (opsiyonel) yapılmadı; kod dondurma etiketi (`v1.0.0`) bulut akışı canlı doğrulanana kadar atılmadı.
+- Docker Desktop notu: 2026-10-08'de komut satırından başlatılınca motor 10 dakikada hazır olmadı; geliştirici elle açınca çalıştı. Docker kapalıysa geliştiriciden açmasını iste.
+- Sıradaki: (1) geliştirici onaylarsa bucket'ı geri kurup bulut akışını DAG üzerinden canlı doğrula, `v1.0.0` etiketi; (2) H7–8: rapor, sunum, demo videosu; (3) opsiyonel PySpark.
