@@ -9,14 +9,23 @@ from pathlib import Path
 
 from psycopg2.extras import execute_values
 
-from src.etl.parser import AuthEvent
-from src.etl.transform import Rejected, event_hash
+from src.etl.parser import AuthEvent, PrivilegeEvent
+from src.etl.transform import Event, Rejected, event_hash
 
 INSERT_EVENTS_SQL = """
     INSERT INTO auth_events (
         event_hash, event_time, host, pid, event_type, auth_method, username,
         is_invalid_user, source_ip, source_port, repeat_count,
         source_file, line_no, raw_line, run_id
+    ) VALUES %s
+    ON CONFLICT (event_hash) DO NOTHING
+    RETURNING 1
+"""
+
+INSERT_PRIVILEGE_SQL = """
+    INSERT INTO privilege_events (
+        event_hash, event_time, host, pid, program, event_type, username, target_user,
+        tty, pwd, command, attempts, source_file, line_no, raw_line, run_id
     ) VALUES %s
     ON CONFLICT (event_hash) DO NOTHING
     RETURNING 1
@@ -58,6 +67,20 @@ def load_events(cur, events: list[tuple[int, AuthEvent]], source_file: str, run_
     return len(execute_values(cur, INSERT_EVENTS_SQL, rows, page_size=1000, fetch=True))
 
 
+def load_privilege_events(cur, events: list[tuple[int, PrivilegeEvent]], source_file: str, run_id: int) -> int:
+    """Gerçekten eklenen satır sayısını döndürür; veritabanında zaten olanlar atlanır."""
+    rows = [
+        (
+            event_hash(e), e.event_time, e.host, e.pid, e.program, e.event_type, e.username,
+            e.target_user, e.tty, e.pwd, e.command, e.attempts, source_file, line_no, e.raw_line, run_id,
+        )
+        for line_no, e in events
+    ]
+    if not rows:
+        return 0
+    return len(execute_values(cur, INSERT_PRIVILEGE_SQL, rows, page_size=1000, fetch=True))
+
+
 def load_rejected(cur, rejected: list[Rejected], source_file: str, file_sha256: str, run_id: int) -> int:
     rows = [
         (run_id, source_file, file_sha256, r.line_no, r.raw_line, r.reason, r.detail)
@@ -95,12 +118,12 @@ def fail_run(conn, run_id: int, error: str) -> None:
     conn.commit()
 
 
-def write_processed(path: Path, events: list[tuple[int, AuthEvent]], source_file: str) -> None:
+def write_processed(path: Path, events: list[tuple[int, Event]], source_file: str) -> None:
     """Geçerli olayları processed katmanına JSON Lines olarak yazar (dosya her çalıştırmada yeniden üretilir)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         for line_no, e in events:
-            record = asdict(e)
+            record = {"kind": "auth" if isinstance(e, AuthEvent) else "privilege", **asdict(e)}
             record["event_time"] = e.event_time.isoformat()
             record["event_hash"] = event_hash(e)
             record["source_file"] = source_file

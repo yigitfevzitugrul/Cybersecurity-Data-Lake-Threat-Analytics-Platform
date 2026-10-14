@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Optional, Union
 
 from src.etl.extract import file_sha256, infer_year, read_lines
-from src.etl.load import fail_run, finish_run, load_events, load_rejected, start_run, write_processed
+from src.etl.load import (
+    fail_run, finish_run, load_events, load_privilege_events, load_rejected, start_run, write_processed,
+)
+from src.etl.parser import AuthEvent
 from src.etl.transform import transform
 from src.etl.validate import validate
 from src.utils.db import apply_schema, get_connection
@@ -55,7 +58,11 @@ def run_pipeline(
         write_processed(processed_dir / f"{path.stem}.jsonl", valid, source_file)
 
         with conn.cursor() as cur:
-            loaded = load_events(cur, valid, source_file, run_id)
+            auth = [(n, e) for n, e in valid if isinstance(e, AuthEvent)]
+            privilege = [(n, e) for n, e in valid if not isinstance(e, AuthEvent)]
+            loaded_auth = load_events(cur, auth, source_file, run_id)
+            loaded_privilege = load_privilege_events(cur, privilege, source_file, run_id)
+            loaded = loaded_auth + loaded_privilege
             load_rejected(cur, rejected, source_file, sha, run_id)
             stats = {
                 "lines_read": len(lines),
@@ -75,6 +82,8 @@ def run_pipeline(
 
     stats["run_id"] = run_id
     stats["reject_reasons"] = dict(Counter(r.reason for r in rejected))
+    stats["auth_events_valid"], stats["auth_events_loaded"] = len(auth), loaded_auth
+    stats["privilege_events_valid"], stats["privilege_events_loaded"] = len(privilege), loaded_privilege
     log.info("run_id=%s bitti: yüklenen=%d zaten_var=%d", run_id, loaded, len(valid) - loaded)
     return stats
 
@@ -126,6 +135,8 @@ def main() -> None:
     print(f"Geçerli olay       : {stats['events_valid']}")
     print(f"  yeni yüklenen    : {stats['events_loaded']}")
     print(f"  zaten var        : {stats['events_skipped_existing']}")
+    print(f"  giriş (SSH)      : {stats['auth_events_valid']} geçerli, {stats['auth_events_loaded']} yeni")
+    print(f"  yetki (sudo/su)  : {stats['privilege_events_valid']} geçerli, {stats['privilege_events_loaded']} yeni")
     print(f"Reddedilen satır   : {stats['lines_rejected']}")
     for reason, count in sorted(stats["reject_reasons"].items()):
         print(f"  {reason:<17}: {count}")

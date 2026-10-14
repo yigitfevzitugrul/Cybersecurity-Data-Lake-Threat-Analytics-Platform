@@ -124,3 +124,41 @@ def test_generated_bad_lines_are_all_quarantined(db_conn, tmp_path):
     assert dirty["events_valid"] == clean["events_valid"]
     assert dirty["events_loaded"] == 0
     assert dirty["lines_read"] == dirty["lines_irrelevant"] + dirty["lines_rejected"] + dirty["events_valid"]
+
+
+MIXED = "\n".join([
+    "Mar  1 10:00:00 srv sshd[100]: Accepted password for alice from 10.20.0.10 port 4001 ssh2",
+    "Mar  1 10:01:00 srv sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/id",
+    "Mar  1 10:02:00 srv sudo:    alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/bash",
+    "Mar  1 10:02:00 srv sudo: pam_unix(sudo:auth): authentication failure; logname=alice uid=1000 euid=0 tty=/dev/pts/0 ruser=alice rhost=  user=alice",
+    "Mar  1 10:03:00 srv su[300]: FAILED SU (to root) alice on pts/0",
+    "Mar  1 10:04:00 srv sudo:    : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/bin/ls",
+]) + "\n"
+
+
+def test_pipeline_loads_privilege_events_into_their_own_table(db_conn, tmp_path):
+    stats = run_pipeline(_write(tmp_path, MIXED, "mixed.log"), 2026, db_conn, tmp_path / "processed", NOW)
+
+    assert (stats["auth_events_valid"], stats["privilege_events_valid"]) == (1, 3)
+    assert (stats["auth_events_loaded"], stats["privilege_events_loaded"]) == (1, 3)
+    assert stats["lines_irrelevant"] == 2  # pam satırı + kullanıcı adı olmayan sudo satırı
+    assert stats["lines_read"] == stats["lines_irrelevant"] + stats["lines_rejected"] + stats["events_valid"]
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT line_no, program, event_type, username, target_user, attempts, command, run_id "
+            "FROM privilege_events ORDER BY line_no"
+        )
+        assert cur.fetchall() == [
+            (2, "sudo", "sudo_command", "alice", "root", 1, "/usr/bin/id", stats["run_id"]),
+            (3, "sudo", "sudo_auth_failure", "alice", "root", 3, "/bin/bash", stats["run_id"]),
+            (5, "su", "su_failure", "alice", "root", 1, None, stats["run_id"]),
+        ]
+    assert _count(db_conn, "auth_events") == 1
+
+    kinds = [json.loads(line)["kind"] for line in (tmp_path / "processed" / "mixed.jsonl").read_text().splitlines()]
+    assert kinds == ["auth", "privilege", "privilege", "privilege"]
+
+    again = run_pipeline(_write(tmp_path, MIXED, "mixed_copy.log"), 2026, db_conn, tmp_path / "processed", NOW)
+    assert (again["events_loaded"], again["events_skipped_existing"]) == (0, 4)
+    assert _count(db_conn, "privilege_events") == 3

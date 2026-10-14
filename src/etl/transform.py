@@ -2,10 +2,12 @@
 import hashlib
 import ipaddress
 from dataclasses import dataclass, replace
-from typing import Iterable
+from typing import Iterable, Union
 
 from src.etl.extract import RawLine
-from src.etl.parser import AuthEvent, ParseError, parse_line
+from src.etl.parser import AuthEvent, ParseError, PrivilegeEvent, parse_line
+
+Event = Union[AuthEvent, PrivilegeEvent]
 
 
 @dataclass(frozen=True)
@@ -17,7 +19,7 @@ class Rejected:
     detail: str
 
 
-def event_hash(event: AuthEvent) -> str:
+def event_hash(event: Event) -> str:
     """Olayın kimliği: zaman (yıl dahil) + ham satır. Aynı olay hangi dosyadan gelirse gelsin aynı hash'i alır."""
     key = f"{event.event_time.isoformat()}|{event.raw_line}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
@@ -36,9 +38,9 @@ def normalize_ip(value: str) -> str:
 
 def transform(
     lines: Iterable[RawLine], year: int
-) -> tuple[list[tuple[int, AuthEvent]], list[Rejected], int]:
+) -> tuple[list[tuple[int, Event]], list[Rejected], int]:
     """(olaylar, reddedilenler, ilgisiz satır sayısı) döndürür."""
-    events: list[tuple[int, AuthEvent]] = []
+    events: list[tuple[int, Event]] = []
     rejected: list[Rejected] = []
     irrelevant = 0
     for raw in lines:
@@ -50,5 +52,7 @@ def transform(
         if event is None:
             irrelevant += 1
             continue
-        events.append((raw.line_no, replace(event, source_ip=normalize_ip(event.source_ip))))
+        if isinstance(event, AuthEvent):
+            event = replace(event, source_ip=normalize_ip(event.source_ip))
+        events.append((raw.line_no, event))
     return events, rejected, irrelevant
