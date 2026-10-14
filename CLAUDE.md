@@ -136,5 +136,11 @@ dags/  grafana/  tests/  docs/
   - Testler: 159 test (CI'da veritabanıyla geçti). Git push için `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push` gerekiyor; Windows kimlik yöneticisindeki token geçersiz.
   - Docker'da doğrulandı: DAG `privilege=True` ile çalıştı (bütün adımlar success, bulut adımları skipped); güvenlik dashboard'una 2 panel (yetki girişimleri, saldırı zincirleri) eklendi ve tarayıcıda kontrol edildi; "En çok alarm üreten IP'ler" IP'siz alarmları dışarıda bırakıyor. Geliştirme DB (12 gün, 84 saldırı, 136 alarm): privilege_escalation 12/12, su_bruteforce 12/12; privilege_abuse 19/19, sensitive_command 5/5, escalation_chain 12/12 doğru; genel recall %85,7, precision %82,3, high/critical precision %100 (79 alarm).
   - Yapılmadı: privilege_events'in bulut (S3/Glue) dışa aktarımı (Ocak'ta bucket kurulurken).
+- 2026-10-14: **Coğrafi konum eklendi** ve doğrulandı:
+  - Kaynak: DB-IP IP-to-City Lite (ücretsiz, hesap/API anahtarı yok, CC BY 4.0 — atıf zorunlu: README + dashboard'daki metin paneli). `python -m src.enrichment.download_geoip` → `data/reference/dbip-city-lite.mmdb` (~121 MB, git dışı; sürüm `dbip-city-lite.json`).
+  - `src/enrichment/geoip.py` + `sql/schema/008_ip_geolocation.sql`: auth_events ve alerts'teki her IP bir kez çözülür (`--refresh` hepsini); özel/ayrılmış adresler (10.x, RFC 5737, 100.64/10) `is_global=false`, sorgulanmaz. Kütüphane `maxminddb==3.2.0` (requirements + Airflow Dockerfile; imaj yeniden derlendi).
+  - DAG: `run_etl` → `enrich_geoip` (dosya yoksa skipped). Konteynerde doğrulandı (run `verify_geoip_1`).
+  - Grafana güvenlik dashboard'u: Geomap (tüm zamanlar) + ülkelere göre bar + atıf metni. CARTO altlığı artık API anahtarı istiyor → altlık Grafana içindeki `public/maps/countries.geojson` (çevrimdışı).
+  - Sonuç: Loghub'daki 25 gerçek IP'nin hepsi konumlandı (Çin 346, Meksika 80, Vietnam 53 başarısız deneme); sentetik IP'ler bilerek konumsuz.
 - 2026-10-14 karar: rapor (Claude Doc) ve sunum (Slides artifact) **en sonda, bütün özellikler bittikten sonra baştan yazılacak**; ara özellik eklemelerinde güncelleme. Yeni özellik eklenebilir.
 - Sıradaki: H7–8 — rapor, sunum, demo videosu. PySpark opsiyonel, önerilmiyor.

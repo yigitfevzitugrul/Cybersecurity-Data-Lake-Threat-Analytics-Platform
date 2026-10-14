@@ -103,6 +103,7 @@ Grafana veritabanına sadece `SELECT` yetkisi olan ayrı bir rolle (`grafana_ro`
 
 ```
 generate_daily_log ──▶ run_etl ──┬──▶ quality_gate
+                                 ├──▶ enrich_geoip
                                  └──▶ detect_threats ──▶ sync_to_cloud ──▶ reconcile_cloud
 ```
 
@@ -199,6 +200,24 @@ Geliştirme veritabanındaki 12 günlük veride (12 privilege_escalation, 12 su_
 Zararsız benzerler (yeni çalışanın tek sudo denemesi, yöneticinin root kabuğu) alarm üretmedi. Aynı ölçüm üç farklı tohumla üretilmiş 10'ar günlük veride de tekrarlandı; birinde `escalation_chain` bir yanlış alarm verdi: şifresini unutup ilk kez giriş yapan bir yönetici, hemen ardından olağan bir sudo komutu çalıştırdı. Kullanıcının geçmişi henüz olmadığı için giriş şüpheli sayıldı ve zincir kuruldu.
 
 ![Yetki yükseltme panelleri](docs/screenshots/grafana_privilege_panels.png)
+
+## Coğrafi konum
+
+Kaynak IP'ler ücretsiz [DB-IP Lite](https://db-ip.com) veritabanıyla ülke, şehir ve koordinata eşlenir. Veritabanı bir kez indirilir ve IP'ler bilgisayarda çözülür; hiçbir adres dışarıdaki bir servise gönderilmez, API anahtarı ya da ücret gerekmez.
+
+```powershell
+python -m src.enrichment.download_geoip   # veritabanını data/reference/ altına indirir (~120 MB, aylık güncellenir)
+python -m src.enrichment.geoip            # yeni IP'leri çözer; --refresh hepsini yeniden çözer
+```
+
+DAG'deki `enrich_geoip` adımı yeni IP'leri her gün çözer; veritabanı dosyası yoksa adım atlanır. Güvenlik dashboard'unda saldırı kaynaklarının dünya haritası ve ülkelere göre başarısız denemeler gösterilir. Harita altlığı Grafana'nın içinde gelen ülke sınırları dosyasıdır; internet ya da harita servisi anahtarı gerektirmez.
+
+![Coğrafi konum ve yetki panelleri](docs/screenshots/grafana_geo_and_privilege.jpg)
+
+- Sentetik verideki adresler belgeleme bloklarından seçildiği için konumları yoktur; haritada yalnızca gerçek Loghub saldırganları görünür (25 IP; en çok Çin, Meksika ve Vietnam).
+- Konum bugünkü veritabanına göredir; eski loglardaki bir IP o tarihte başka bir yerde olabilir.
+
+IP konum verisi: IP Geolocation by DB-IP, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## AWS Data Lake
 

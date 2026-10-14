@@ -982,6 +982,168 @@
         "defaults": {},
         "overrides": []
       }
+    },
+    {
+      "id": 14,
+      "type": "geomap",
+      "title": "Saldırı kaynakları haritası (tüm zamanlar)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "secdl-postgres"
+      },
+      "description": "Başarısız SSH denemelerinin kaynak IP'leri; nokta büyüklüğü deneme sayısıdır. Sentetik verideki adresler belgeleme bloklarından seçildiği için haritada yalnızca gerçek (Loghub) saldırganlar görünür. Konum bugünkü veritabanına göredir. Konum verisi: IP Geolocation by DB-IP (https://db-ip.com), CC BY 4.0.",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 16,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "secdl-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT g.latitude, g.longitude, g.country_name AS \"Ülke\", g.city AS \"Şehir\",\n       host(a.source_ip) AS \"IP\", SUM(a.repeat_count) AS \"Başarısız deneme\"\nFROM auth_events a\nJOIN ip_geolocation g ON g.ip = a.source_ip\nWHERE a.event_type = 'login_failed' AND g.latitude IS NOT NULL\nGROUP BY 1, 2, 3, 4, 5\nORDER BY 6 DESC"
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 30,
+          "zoom": 1.2,
+          "allLayers": true
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": false,
+          "showAttribution": false
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "basemap": {
+          "type": "geojson",
+          "name": "Ülkeler",
+          "config": {
+            "src": "public/maps/countries.geojson",
+            "rules": [],
+            "style": {
+              "color": {
+                "fixed": "#3a4458"
+              },
+              "opacity": 0.6
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Saldırganlar",
+            "tooltip": true,
+            "location": {
+              "mode": "coords",
+              "latitude": "latitude",
+              "longitude": "longitude"
+            },
+            "config": {
+              "showLegend": false,
+              "style": {
+                "size": {
+                  "field": "Başarısız deneme",
+                  "min": 5,
+                  "max": 26,
+                  "fixed": 6
+                },
+                "color": {
+                  "fixed": "orange"
+                },
+                "opacity": 0.75,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 15,
+      "type": "barchart",
+      "title": "Ülkelere göre başarısız deneme (tüm zamanlar)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "secdl-postgres"
+      },
+      "description": "Yalnızca konumu bilinen (internete açık) adresler; özel ve belgeleme adresleri dahil değildir. Konum verisi: IP Geolocation by DB-IP (https://db-ip.com), CC BY 4.0.",
+      "gridPos": {
+        "x": 16,
+        "y": 42,
+        "w": 8,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "secdl-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT g.country_name AS \"Ülke\", SUM(a.repeat_count) AS \"Başarısız deneme\"\nFROM auth_events a\nJOIN ip_geolocation g ON g.ip = a.source_ip\nWHERE a.event_type = 'login_failed' AND g.country_name IS NOT NULL\nGROUP BY 1\nORDER BY 2 DESC\nLIMIT 10"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Ülke",
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 16,
+      "type": "text",
+      "title": "",
+      "transparent": true,
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 2
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "IP konum verisi: [IP Geolocation by DB-IP](https://db-ip.com) (CC BY 4.0)"
+      }
     }
   ]
 }

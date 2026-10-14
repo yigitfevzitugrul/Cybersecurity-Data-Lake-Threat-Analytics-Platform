@@ -1,12 +1,14 @@
 """Günlük auth log ETL'i ve tehdit tespiti.
 
     generate_daily_log → run_etl ─┬→ quality_gate
+                                  ├→ enrich_geoip
                                   └→ detect_threats → sync_to_cloud → reconcile_cloud
 
 generate_daily_log gerçek bir log kaynağını taklit eder: çalıştırmanın mantıksal
 günü için sentetik bir log dosyası üretir. run_etl, data/raw altındaki henüz
 işlenmemiş tüm *.log dosyalarını pipeline'dan geçirir. detect_threats tespit
-kurallarını çalıştırıp alarmları yazar. sync_to_cloud katmanları S3'e gönderir,
+kurallarını çalıştırıp alarmları yazar. enrich_geoip yeni kaynak IP'leri yerel
+DB-IP veritabanıyla ülke / şehirle eşleştirir (dosya yoksa atlanır). sync_to_cloud katmanları S3'e gönderir,
 reconcile_cloud yerel veritabanı ile Athena'nın aynı sayıları verdiğini doğrular.
 Bulut adımları sadece CLOUD_SYNC_ENABLED=true iken çalışır (docker-compose.cloud.yml);
 aksi halde atlanır. İş mantığı src/ altında; bu dosya sadece zamanlama ve
@@ -91,6 +93,24 @@ def auth_log_etl():
         print(summary)
         return summary
 
+    @task
+    def enrich_geoip() -> dict:
+        from src.enrichment.download_geoip import DB_PATH
+        from src.enrichment.geoip import enrich, open_reader
+        from src.utils.db import get_connection
+
+        if not DB_PATH.exists():
+            raise AirflowSkipException("Konum veritabanı yok: python -m src.enrichment.download_geoip")
+        reader, version = open_reader()
+        conn = get_connection()
+        try:
+            result = enrich(conn, reader, version)
+        finally:
+            conn.close()
+            reader.close()
+        print(result)
+        return result
+
     def require_cloud() -> None:
         if os.environ.get("CLOUD_SYNC_ENABLED", "").lower() != "true":
             raise AirflowSkipException("Bulut senkronu kapalı (CLOUD_SYNC_ENABLED != true).")
@@ -132,6 +152,7 @@ def auth_log_etl():
     results = run_etl()
     generate_daily_log() >> results
     quality_gate(results)
+    results >> enrich_geoip()
     results >> detect_threats() >> sync_to_cloud() >> reconcile_cloud()
 
 

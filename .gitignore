@@ -5,6 +5,7 @@
 data/raw/*
 data/processed/*
 data/curated/*
+data/reference/*
 !data/**/.gitkeep
 
 # Python

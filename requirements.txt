@@ -6,3 +6,5 @@ pytest==9.1.1
 # Seviye 5: AWS Data Lake
 boto3==1.43.108
 pyarrow==25.0.1
+# Seviye 6+: IP coğrafi konum (DB-IP Lite, çevrimdışı)
+maxminddb==3.2.0
