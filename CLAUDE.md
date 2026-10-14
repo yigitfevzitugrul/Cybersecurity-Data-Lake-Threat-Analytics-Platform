@@ -147,7 +147,7 @@ dags/  grafana/  tests/  docs/
   - `sensitive_command.patterns` config'te artık teknik kimliğine göre gruplu (dict); eşleşen teknikler `details.techniques`'e yazılır.
   - `sql/schema/009_mitre_attack.sql`: `alerts.mitre_tactic`, `alerts.mitre_techniques TEXT[]`, başvuru tablosu `attack_techniques` (motor her çalıştırmada upsert eder). Eski alarmlar bir sonraki tespit çalıştırmasında etiketlenir, `--reset` gerekmez.
   - Bulut: curated `alerts` Parquet/Glue şemasına `mitre_tactic`, `mitre_techniques array<string>` eklendi — Ocak'ta `setup` Glue tablosunu güncelleyecek (canlı denenmedi).
-  - Grafana güvenlik dashboard'u: "ATT&CK taktiklerine göre alarmlar" + "ATT&CK teknikleri" (attack.mitre.org bağlantılı); "Son alarmlar"a ATT&CK sütunu. Tarayıcıda kontrol edildi. Ekran görüntüsü alınamadı (pane çizmedi), README'de yok.
+  - Grafana güvenlik dashboard'u: "ATT&CK taktiklerine göre alarmlar" + "ATT&CK teknikleri" (attack.mitre.org bağlantılı); "Son alarmlar"a ATT&CK sütunu. Tarayıcıda kontrol edildi; ekran görüntüsü `docs/screenshots/grafana_attack_panels.jpg`. Not: tarayıcı paneli gizliyken ekran görüntüsü alınamıyor, Grafana oturumu Docker yeniden başlayınca düşüyor (girişi geliştirici yapar).
   - Geliştirme DB: 168 alarmın hepsi etiketli (Credential Access 108, Initial Access 39, Privilege Escalation 21). Testler: 185.
 - 2026-10-14 karar: rapor (Claude Doc) ve sunum (Slides artifact) **en sonda, bütün özellikler bittikten sonra baştan yazılacak**; ara özellik eklemelerinde güncelleme. Yeni özellik eklenebilir.
 - Sıradaki: H7–8 — rapor, sunum, demo videosu. PySpark opsiyonel, önerilmiyor.

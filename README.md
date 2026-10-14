@@ -219,6 +219,8 @@ ATT&CK bazı teknikleri birden çok taktiğe bağlar (ör. Valid Accounts dört 
 
 Güvenlik dashboard'unda alarmların taktiklere dağılımı ve teknik tablosu bulunur; teknik kimliğine tıklayınca ATT&CK sayfası açılır.
 
+![ATT&CK panelleri](docs/screenshots/grafana_attack_panels.jpg)
+
 ## Coğrafi konum
 
 Kaynak IP'ler ücretsiz [DB-IP Lite](https://db-ip.com) veritabanıyla ülke, şehir ve koordinata eşlenir. Veritabanı bir kez indirilir ve IP'ler bilgisayarda çözülür; hiçbir adres dışarıdaki bir servise gönderilmez, API anahtarı ya da ücret gerekmez.
