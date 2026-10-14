@@ -245,6 +245,7 @@ Yerel katmanlar aynı mantıkla S3'e taşınır ve Athena ile sorgulanır:
 s3://<bucket>/
 ├── raw/auth_logs/<dosya>.log                               ham loglar
 ├── processed/auth_events/event_date=YYYY-MM-DD/*.parquet   doğrulanmış olaylar (güne göre bölümlü)
+├── processed/privilege_events/event_date=YYYY-MM-DD/      sudo / su olayları (güne göre bölümlü)
 ├── curated/alerts/, curated/daily_ip_summary/              alarmlar ve günlük IP özeti
 └── athena-results/                                         sorgu sonuçları (7 gün sonra silinir)
 ```
@@ -252,7 +253,7 @@ s3://<bucket>/
 | Bileşen | Ne yapıldı |
 |---|---|
 | S3 | Herkese açık erişim kapalı, sunucu tarafı şifreleme, TLS dışı istekler bucket politikasıyla reddedilir |
-| Glue Data Catalog | `auth_events`, `alerts`, `daily_ip_summary` tabloları. Bölümler *partition projection* ile S3 yolundan hesaplanır; crawler çalıştırmak gerekmez |
+| Glue Data Catalog | `auth_events`, `privilege_events`, `alerts`, `daily_ip_summary` tabloları. Bölümler *partition projection* ile S3 yolundan hesaplanır; crawler çalıştırmak gerekmez |
 | Athena | Ayrı workgroup; sorgu başına en fazla 100 MB taranabilir (maliyet koruması) |
 | IAM | Pipeline, kalıcı erişim anahtarı olmayan bir rolü üstlenir (`sts:AssumeRole`, 1 saatlik geçici kimlik). Yetkileri [infra/iam/pipeline_policy.json](infra/iam/pipeline_policy.json) dosyasındadır |
 | Budgets | Aylık maliyet bütçesi; gerçekleşen harcama %80'i ya da tahmin %100'ü aşınca e-posta |

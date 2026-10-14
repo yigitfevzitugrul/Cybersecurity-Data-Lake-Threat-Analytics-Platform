@@ -10,6 +10,7 @@ load_dotenv()
 
 RAW_PREFIX = "raw/auth_logs"
 PROCESSED_PREFIX = "processed/auth_events"
+PRIVILEGE_PREFIX = "processed/privilege_events"
 CURATED_PREFIX = "curated"
 ATHENA_RESULTS_PREFIX = "athena-results"
 

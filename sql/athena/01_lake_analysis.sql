@@ -42,3 +42,21 @@ JOIN daily_ip_summary s
 WHERE a.severity = 'critical'
 ORDER BY a.window_start DESC
 LIMIT 10;
+
+-- Yetki yükseltme girişimleri: kullanıcı ve olay türüne göre (processed katmanı)
+SELECT username, event_type, COUNT(*) AS olay, SUM(attempts) AS deneme
+FROM privilege_events
+GROUP BY username, event_type
+ORDER BY deneme DESC
+LIMIT 20;
+
+-- sudo ile çalıştırılan hassas komutlar ve aynı hesabın o gün aldığı alarmlar
+-- (processed ve curated katmanlarının birleşimi)
+SELECT p.event_time, p.username, p.command, a.rule, a.severity
+FROM privilege_events p
+JOIN alerts a
+  ON a.username = p.username AND CAST(a.window_start AS date) = CAST(p.event_time AS date)
+WHERE p.event_type = 'sudo_command'
+  AND regexp_like(p.command, '/etc/shadow|/etc/sudoers|useradd|adduser')
+ORDER BY p.event_time DESC
+LIMIT 20;

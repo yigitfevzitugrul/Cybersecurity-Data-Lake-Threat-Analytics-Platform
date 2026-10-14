@@ -1,7 +1,7 @@
 """Data lake tablolarının şemaları: hem Parquet yazarken hem Glue kataloğunda kullanılır."""
 import pyarrow as pa
 
-from src.cloud.config import CURATED_PREFIX, PROCESSED_PREFIX, CloudConfig
+from src.cloud.config import CURATED_PREFIX, PRIVILEGE_PREFIX, PROCESSED_PREFIX, CloudConfig
 
 # (sütun adı, Athena tipi, pyarrow tipi)
 AUTH_EVENTS_COLUMNS = [
@@ -17,6 +17,24 @@ AUTH_EVENTS_COLUMNS = [
     ("source_ip", "string", pa.string()),
     ("source_port", "int", pa.int32()),
     ("repeat_count", "int", pa.int32()),
+    ("source_file", "string", pa.string()),
+    ("line_no", "int", pa.int32()),
+]
+
+PRIVILEGE_EVENTS_COLUMNS = [
+    ("event_id", "bigint", pa.int64()),
+    ("event_hash", "string", pa.string()),
+    ("event_time", "timestamp", pa.timestamp("ms")),
+    ("host", "string", pa.string()),
+    ("pid", "int", pa.int32()),
+    ("program", "string", pa.string()),
+    ("event_type", "string", pa.string()),
+    ("username", "string", pa.string()),
+    ("target_user", "string", pa.string()),
+    ("tty", "string", pa.string()),
+    ("pwd", "string", pa.string()),
+    ("command", "string", pa.string()),
+    ("attempts", "int", pa.int32()),
     ("source_file", "string", pa.string()),
     ("line_no", "int", pa.int32()),
 ]
@@ -66,25 +84,34 @@ def _table_input(name: str, columns, location: str, description: str) -> dict:
     }
 
 
-def glue_tables(cfg: CloudConfig) -> list[dict]:
-    """Glue kataloğuna yazılacak tablo tanımları."""
-    base = f"s3://{cfg.bucket}"
-    auth_events = _table_input(
-        "auth_events", AUTH_EVENTS_COLUMNS, f"{base}/{PROCESSED_PREFIX}/",
-        "Processed katmanı: doğrulanmış kimlik doğrulama olayları (güne göre bölümlenmiş)",
-    )
-    auth_events["PartitionKeys"] = [{"Name": "event_date", "Type": "string"}]
+def _daily_table(name: str, columns, location: str, description: str) -> dict:
+    """Güne göre bölümlenmiş tablo (event_date=YYYY-MM-DD/)."""
+    table = _table_input(name, columns, f"{location}/", description)
+    table["PartitionKeys"] = [{"Name": "event_date", "Type": "string"}]
     # Partition projection: bölümler S3 yolundan hesaplanır; crawler ya da
     # MSCK REPAIR gerekmez ve yeni günler kendiliğinden görünür.
-    auth_events["Parameters"].update({
+    table["Parameters"].update({
         "projection.enabled": "true",
         "projection.event_date.type": "date",
         "projection.event_date.format": "yyyy-MM-dd",
         "projection.event_date.range": "2020-01-01,NOW+1DAYS",
-        "storage.location.template": f"{base}/{PROCESSED_PREFIX}/event_date=${{event_date}}/",
+        "storage.location.template": f"{location}/event_date=${{event_date}}/",
     })
+    return table
+
+
+def glue_tables(cfg: CloudConfig) -> list[dict]:
+    """Glue kataloğuna yazılacak tablo tanımları."""
+    base = f"s3://{cfg.bucket}"
     return [
-        auth_events,
+        _daily_table(
+            "auth_events", AUTH_EVENTS_COLUMNS, f"{base}/{PROCESSED_PREFIX}",
+            "Processed katmanı: doğrulanmış kimlik doğrulama olayları (güne göre bölümlenmiş)",
+        ),
+        _daily_table(
+            "privilege_events", PRIVILEGE_EVENTS_COLUMNS, f"{base}/{PRIVILEGE_PREFIX}",
+            "Processed katmanı: sudo / su yetki yükseltme olayları (güne göre bölümlenmiş)",
+        ),
         _table_input(
             "alerts", ALERTS_COLUMNS, f"{base}/{CURATED_PREFIX}/alerts/",
             "Curated katmanı: tespit kurallarının ürettiği alarmlar",

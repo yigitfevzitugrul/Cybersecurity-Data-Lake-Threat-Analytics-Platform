@@ -7,7 +7,9 @@ import pyarrow.parquet as pq
 from botocore.exceptions import ClientError
 
 from src.cloud.athena import format_table, split_statements
-from src.cloud.catalog import ALERTS_COLUMNS, AUTH_EVENTS_COLUMNS, DAILY_IP_SUMMARY_COLUMNS, glue_tables
+from src.cloud.catalog import (
+    ALERTS_COLUMNS, AUTH_EVENTS_COLUMNS, DAILY_IP_SUMMARY_COLUMNS, PRIVILEGE_EVENTS_COLUMNS, glue_tables,
+)
 from src.cloud.config import CloudConfig
 from src.cloud.setup import render_pipeline_policy
 from src.cloud.sync import partition_key, put_if_changed, rows_to_parquet
@@ -55,6 +57,20 @@ def test_auth_events_parquet_roundtrip():
     assert str(table.schema.field("event_time").type) == "timestamp[ms]"
 
 
+def test_privilege_events_parquet_roundtrip():
+    rows = [
+        (1, "c" * 64, datetime(2026, 9, 1, 10, 3, 0), "srv", 812, "sudo", "sudo_auth_failure", "dave", "root",
+         "pts/1", "/home/dave", "/bin/cat /etc/shadow", 3, "auth.log", 40),
+        (2, "d" * 64, datetime(2026, 9, 1, 10, 4, 0), "srv", None, "su", "su_failure", "dave", "root",
+         "pts/1", None, None, 1, "auth.log", 41),
+    ]
+    table = pq.read_table(io.BytesIO(rows_to_parquet(rows, PRIVILEGE_EVENTS_COLUMNS)))
+
+    assert table.column_names == [name for name, _, _ in PRIVILEGE_EVENTS_COLUMNS]
+    assert table.column("attempts").to_pylist() == [3, 1]
+    assert table.column("command").to_pylist() == ["/bin/cat /etc/shadow", None]
+
+
 def test_curated_parquet_schemas():
     alerts = [("h" * 64, "brute_force", "high", "192.0.2.10", None, datetime(2026, 9, 1), datetime(2026, 9, 1, 0, 5),
                40, 1, json.dumps({"hosts": ["srv"]}), "Credential Access", ["T1110.001"])]
@@ -82,6 +98,9 @@ def test_parquet_output_is_deterministic():
 
 def test_partition_key():
     assert partition_key(date(2026, 9, 1)) == "processed/auth_events/event_date=2026-09-01/part-0000.parquet"
+    assert partition_key(date(2026, 9, 1), "processed/privilege_events") == (
+        "processed/privilege_events/event_date=2026-09-01/part-0000.parquet"
+    )
 
 
 def test_put_if_changed_uploads_only_new_content():
@@ -95,7 +114,7 @@ def test_put_if_changed_uploads_only_new_content():
 
 def test_glue_tables_match_parquet_schemas_and_locations():
     tables = {t["Name"]: t for t in glue_tables(CFG)}
-    assert set(tables) == {"auth_events", "alerts", "daily_ip_summary"}
+    assert set(tables) == {"auth_events", "privilege_events", "alerts", "daily_ip_summary"}
 
     auth = tables["auth_events"]
     assert [c["Name"] for c in auth["StorageDescriptor"]["Columns"]] == [n for n, _, _ in AUTH_EVENTS_COLUMNS]
@@ -107,6 +126,14 @@ def test_glue_tables_match_parquet_schemas_and_locations():
     # Bölüm sütunu veri sütunları arasında tekrar etmemeli.
     assert "event_date" not in [c["Name"] for c in auth["StorageDescriptor"]["Columns"]]
     assert tables["alerts"]["StorageDescriptor"]["Location"] == "s3://test-bucket/curated/alerts/"
+
+    privilege = tables["privilege_events"]
+    assert [c["Name"] for c in privilege["StorageDescriptor"]["Columns"]] == [n for n, _, _ in PRIVILEGE_EVENTS_COLUMNS]
+    assert privilege["PartitionKeys"] == [{"Name": "event_date", "Type": "string"}]
+    assert privilege["StorageDescriptor"]["Location"] == "s3://test-bucket/processed/privilege_events/"
+    assert privilege["Parameters"]["storage.location.template"] == (
+        "s3://test-bucket/processed/privilege_events/event_date=${event_date}/"
+    )
 
 
 def test_pipeline_policy_is_scoped_to_project_resources():
@@ -144,3 +171,45 @@ def test_format_table():
         "192.0.2.10 | 5 \n"
         "           | 12"
     )
+
+
+def test_daily_sync_writes_one_object_per_day_and_skips_unchanged():
+    from src.cloud.sync import _sync_daily
+
+    rows = [
+        (1, "a" * 64, datetime(2026, 9, 1, 23, 59), "srv", None, "su", "su_failure", "dave", "root",
+         None, None, None, 1, "auth.log", 1),
+        (2, "b" * 64, datetime(2026, 9, 2, 0, 1), "srv", None, "su", "su_success", "dave", "root",
+         None, None, None, 1, "auth.log", 2),
+    ]
+    s3 = FakeS3()
+    first = _sync_daily(s3, CFG, rows, PRIVILEGE_EVENTS_COLUMNS, "processed/privilege_events")
+    second = _sync_daily(s3, CFG, rows, PRIVILEGE_EVENTS_COLUMNS, "processed/privilege_events")
+
+    assert first == {"rows": 2, "objects": 2, "uploaded": 2}
+    assert second == {"rows": 2, "objects": 2, "uploaded": 0}
+    assert sorted(key for _, key in s3.objects) == [
+        "processed/privilege_events/event_date=2026-09-01/part-0000.parquet",
+        "processed/privilege_events/event_date=2026-09-02/part-0000.parquet",
+    ]
+
+
+def test_sync_exports_privilege_events_from_database(db_conn, tmp_path):
+    from src.cloud.sync import sync_privilege
+    from src.etl.pipeline import run_pipeline
+
+    log = tmp_path / "auth.log"
+    log.write_text(
+        "Mar  1 10:00:00 srv sudo:    dave : 3 incorrect password attempts ; TTY=pts/1 ; PWD=/home/dave ; "
+        "USER=root ; COMMAND=/bin/bash\n"
+        "Mar  2 11:00:00 srv sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/cat /etc/shadow\n",
+        encoding="utf-8", newline="\n",
+    )
+    run_pipeline(log, 2026, db_conn, tmp_path / "processed", datetime(2026, 12, 31))
+
+    s3 = FakeS3()
+    assert sync_privilege(s3, CFG, db_conn) == {"rows": 2, "objects": 2, "uploaded": 2}
+    body = s3.objects[("test-bucket", "processed/privilege_events/event_date=2026-03-02/part-0000.parquet")]["Body"]
+    table = pq.read_table(io.BytesIO(body))
+    assert table.column("command").to_pylist() == ["/bin/cat /etc/shadow"]
+    assert table.column("username").to_pylist() == ["alice"]

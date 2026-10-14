@@ -21,6 +21,11 @@ CHECKS = [
         "SELECT COUNT(*), COALESCE(SUM(repeat_count), 0) FROM auth_events",
     ),
     (
+        "privilege_events", "deneme",
+        "SELECT COUNT(*), COALESCE(SUM(attempts), 0) FROM privilege_events",
+        "SELECT COUNT(*), COALESCE(SUM(attempts), 0) FROM privilege_events",
+    ),
+    (
         "alerts", "başarısız deneme",
         "SELECT COUNT(*), COALESCE(SUM(attempt_count), 0) FROM alerts",
         "SELECT COUNT(*), COALESCE(SUM(attempt_count), 0) FROM alerts",

@@ -2,6 +2,7 @@
 
     raw/auth_logs/<dosya>.log                              ham log dosyaları
     processed/auth_events/event_date=YYYY-MM-DD/*.parquet  doğrulanmış olaylar (PostgreSQL'den)
+    processed/privilege_events/event_date=YYYY-MM-DD/      sudo / su olayları (PostgreSQL'den)
     curated/alerts/, curated/daily_ip_summary/             alarmlar ve günlük özet
 
 En az yetkili pipeline rolüyle çalışır. Tekrar çalıştırmak güvenlidir: içeriği
@@ -19,8 +20,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from botocore.exceptions import ClientError
 
-from src.cloud.catalog import ALERTS_COLUMNS, AUTH_EVENTS_COLUMNS, DAILY_IP_SUMMARY_COLUMNS, arrow_schema
-from src.cloud.config import CURATED_PREFIX, PROCESSED_PREFIX, RAW_PREFIX, CloudConfig, load_config, pipeline_session
+from src.cloud.catalog import (
+    ALERTS_COLUMNS, AUTH_EVENTS_COLUMNS, DAILY_IP_SUMMARY_COLUMNS, PRIVILEGE_EVENTS_COLUMNS, arrow_schema,
+)
+from src.cloud.config import (
+    CURATED_PREFIX, PRIVILEGE_PREFIX, PROCESSED_PREFIX, RAW_PREFIX, CloudConfig, load_config, pipeline_session,
+)
 from src.etl.pipeline import RAW_DIR
 from src.utils.db import get_connection
 
@@ -28,6 +33,13 @@ AUTH_EVENTS_SQL = """
     SELECT event_id, event_hash, event_time, host, pid, event_type, auth_method, username,
            is_invalid_user, host(source_ip), source_port, repeat_count, source_file, line_no
     FROM auth_events
+    ORDER BY event_time, event_id
+"""
+
+PRIVILEGE_EVENTS_SQL = """
+    SELECT event_id, event_hash, event_time, host, pid, program, event_type, username,
+           target_user, tty, pwd, command, attempts, source_file, line_no
+    FROM privilege_events
     ORDER BY event_time, event_id
 """
 
@@ -60,8 +72,8 @@ def rows_to_parquet(rows: list[tuple], columns) -> bytes:
     return buffer.getvalue()
 
 
-def partition_key(day) -> str:
-    return f"{PROCESSED_PREFIX}/event_date={day.isoformat()}/part-0000.parquet"
+def partition_key(day, prefix: str = PROCESSED_PREFIX) -> str:
+    return f"{prefix}/event_date={day.isoformat()}/part-0000.parquet"
 
 
 def put_if_changed(s3, bucket: str, key: str, body: bytes) -> bool:
@@ -93,14 +105,24 @@ def sync_raw(s3, cfg: CloudConfig, raw_dir: Path = RAW_DIR) -> dict:
     return {"objects": len(files), "uploaded": uploaded}
 
 
-def sync_processed(s3, cfg: CloudConfig, conn) -> dict:
-    """auth_events'i güne göre bölümlenmiş Parquet olarak yazar (gün başına bir dosya)."""
-    rows = _query(conn, AUTH_EVENTS_SQL)
+def _sync_daily(s3, cfg: CloudConfig, rows: list[tuple], columns, prefix: str) -> dict:
+    """Olayları güne göre bölümlenmiş Parquet olarak yazar (gün başına bir dosya).
+
+    Satırlar zamana göre sıralı olmalı; zaman üçüncü sütundur.
+    """
     partitions = uploaded = 0
     for day, group in groupby(rows, key=lambda row: row[2].date()):
         partitions += 1
-        uploaded += put_if_changed(s3, cfg.bucket, partition_key(day), rows_to_parquet(list(group), AUTH_EVENTS_COLUMNS))
+        uploaded += put_if_changed(s3, cfg.bucket, partition_key(day, prefix), rows_to_parquet(list(group), columns))
     return {"rows": len(rows), "objects": partitions, "uploaded": uploaded}
+
+
+def sync_processed(s3, cfg: CloudConfig, conn) -> dict:
+    return _sync_daily(s3, cfg, _query(conn, AUTH_EVENTS_SQL), AUTH_EVENTS_COLUMNS, PROCESSED_PREFIX)
+
+
+def sync_privilege(s3, cfg: CloudConfig, conn) -> dict:
+    return _sync_daily(s3, cfg, _query(conn, PRIVILEGE_EVENTS_SQL), PRIVILEGE_EVENTS_COLUMNS, PRIVILEGE_PREFIX)
 
 
 def sync_curated(s3, cfg: CloudConfig, conn) -> dict:
@@ -121,6 +143,7 @@ def sync_all(cfg: CloudConfig, conn, session=None) -> dict:
     return {
         "raw": sync_raw(s3, cfg),
         "processed": sync_processed(s3, cfg, conn),
+        "privilege": sync_privilege(s3, cfg, conn),
         "curated": sync_curated(s3, cfg, conn),
     }
 
@@ -134,9 +157,10 @@ def main() -> None:
         conn.close()
 
     print(f"Hedef: s3://{cfg.bucket}")
-    raw, processed, curated = result["raw"], result["processed"], result["curated"]
+    raw, processed, privilege, curated = result["raw"], result["processed"], result["privilege"], result["curated"]
     print(f"  raw       : {raw['objects']} dosya, {raw['uploaded']} yüklendi")
     print(f"  processed : {processed['rows']} olay, {processed['objects']} günlük bölüm, {processed['uploaded']} yüklendi")
+    print(f"  yetki     : {privilege['rows']} olay, {privilege['objects']} günlük bölüm, {privilege['uploaded']} yüklendi")
     print(f"  curated   : {curated['alerts']} alarm, {curated['summary_rows']} özet satırı, {curated['uploaded']} yüklendi")
 
 

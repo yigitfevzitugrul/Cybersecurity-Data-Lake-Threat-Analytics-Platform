@@ -12,7 +12,10 @@ LOG = "\n".join(
     [f"Mar  1 10:00:{i:02d} srv sshd[{100 + i}]: Failed password for root from 192.0.2.10 port {4000 + i} ssh2"
      for i in range(12)]
     + ["Mar  1 10:00:30 srv sshd[200]: message repeated 3 times: [ Failed password for root from 192.0.2.11 port 5000 ssh2]",
-       "Mar  2 09:00:00 srv sshd[300]: Accepted password for alice from 10.20.0.10 port 6000 ssh2"]
+       "Mar  2 09:00:00 srv sshd[300]: Accepted password for alice from 10.20.0.10 port 6000 ssh2",
+       "Mar  2 09:05:00 srv sudo:    alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/alice ; "
+       "USER=root ; COMMAND=/bin/bash",
+       "Mar  2 09:06:00 srv sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/id"]
 ) + "\n"
 
 
@@ -39,23 +42,31 @@ def test_reconcile_compares_local_counts_with_athena(db_conn, tmp_path, monkeypa
     run_detection(db_conn, load_config())
 
     # 14 olay; "message repeated 3 times" yüzünden 16 deneme. İki günde üç farklı (gün, IP) çifti.
-    cloud_answers = {"auth_events": ["14", "16"], "daily_ip_summary": ["3", "15"]}
+    # İki sudo olayı; yanlış parola satırı 3 deneme sayılır.
+    cloud_answers = {"auth_events": ["14", "16"], "privilege_events": ["2", "4"], "daily_ip_summary": ["3", "15"]}
     with db_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*), COALESCE(SUM(attempt_count), 0) FROM alerts")
         cloud_answers["alerts"] = [str(value) for value in cur.fetchone()]
     assert int(cloud_answers["alerts"][0]) > 0
 
     def fake_run_query(athena, cfg, sql):
-        table = next(name for name in ("daily_ip_summary", "auth_events", "alerts") if f"FROM {name}" in sql)
+        table = next(name for name in ("daily_ip_summary", "auth_events", "privilege_events", "alerts")
+                     if f"FROM {name}" in sql)
         return {"rows": [cloud_answers[table]]}
 
     monkeypatch.setattr(reconcile_module, "run_query", fake_run_query)
     results = reconcile(db_conn, athena=None, cfg=None)
     assert [(r["table"], r["match"]) for r in results] == [
-        ("auth_events", True), ("alerts", True), ("daily_ip_summary", True),
+        ("auth_events", True), ("privilege_events", True), ("alerts", True), ("daily_ip_summary", True),
     ]
 
     # Bulutta bir satır eksikse fark yakalanır.
     cloud_answers["auth_events"] = ["13", "15"]
     results = reconcile(db_conn, athena=None, cfg=None)
-    assert [r["match"] for r in results] == [False, True, True]
+    assert [r["match"] for r in results] == [False, True, True, True]
+
+    # Yetki olaylarında bir denemenin eksik olması da yakalanır.
+    cloud_answers["auth_events"] = ["14", "16"]
+    cloud_answers["privilege_events"] = ["2", "3"]
+    results = reconcile(db_conn, athena=None, cfg=None)
+    assert [r["match"] for r in results] == [True, False, True, True]
