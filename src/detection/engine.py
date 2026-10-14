@@ -13,7 +13,7 @@ from typing import Union
 import yaml
 from psycopg2.extras import Json, execute_values
 
-from src.detection.rules import Alert, Event, run_rules
+from src.detection.rules import Alert, Event, PrivEvent, run_rules
 from src.utils.db import apply_schema, get_connection
 
 log = logging.getLogger(__name__)
@@ -55,6 +55,15 @@ def fetch_events(conn) -> list[Event]:
         return [Event(*row) for row in cur.fetchall()]
 
 
+def fetch_privilege_events(conn) -> list[PrivEvent]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT event_time, host, program, event_type, username, target_user, command, attempts "
+            "FROM privilege_events ORDER BY event_time, event_id"
+        )
+        return [PrivEvent(*row) for row in cur.fetchall()]
+
+
 def save_alerts(conn, alerts: list[Alert]) -> tuple[int, int]:
     """Alarmları yazar; (yeni, güncellenen) sayılarını döndürür."""
     if not alerts:
@@ -84,13 +93,15 @@ def run_detection(conn, config: dict, reset: bool = False) -> dict:
     üretilirse güncellenir. `reset` eşik değişikliklerinden sonra eski alarmları siler.
     """
     events = fetch_events(conn)
-    alerts = run_rules(events, config)
+    privilege_events = fetch_privilege_events(conn)
+    alerts = run_rules(events, config, privilege_events)
     if reset:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM alerts")
     inserted, updated = save_alerts(conn, alerts)
     summary = {
         "events": len(events),
+        "privilege_events": len(privilege_events),
         "alerts": len(alerts),
         "new_alerts": inserted,
         "updated_alerts": updated,

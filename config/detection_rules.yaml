@@ -36,3 +36,28 @@ auth_anomaly:
   # 3) off_hours: mesai dışı giriş. Mesai [start, end) saat aralığıdır.
   business_hours_start: 7
   business_hours_end: 20
+
+# --- Yetki yükseltme (sudo / su) ---
+
+privilege_abuse:
+  # Aynı kullanıcının başarısız yetki girişimleri: yanlış sudo parolası, sudo yetkisi
+  # olmadan sudo, başarısız su. Oturum boşluğu ve toplam eşik:
+  window_minutes: 10
+  min_failures: 3
+  high_severity_failures: 6
+
+sensitive_command:
+  # sudo ile çalıştırıldığında alarm üreten komut kalıpları (Python düzenli ifadesi).
+  # Root kabuğu açmak (sudo -i, sudo /bin/bash) yöneticiler için olağan olduğundan listede yok.
+  session_gap_minutes: 30
+  patterns:
+    - '/etc/shadow'
+    - '/etc/sudoers'
+    - '\bvisudo\b'
+    - '\b(useradd|usermod|adduser|passwd|chpasswd)\b'
+    - '\bchmod\s+([ugoa]*\+s|[0-7]?[4-7][0-7]{3})\b'
+
+escalation_chain:
+  # Şüpheli bir girişten (auth_anomaly high/critical: bilinmeyen IP'den çok başarısızlık
+  # sonrası giriş ya da gece yeni IP'den giriş) sonra aynı hesapla yapılan her yetki etkinliği.
+  follow_minutes: 60

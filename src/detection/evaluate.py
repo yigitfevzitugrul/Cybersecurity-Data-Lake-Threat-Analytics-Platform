@@ -17,7 +17,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
-from src.detection.rules import AUTH_ANOMALY, BRUTE_FORCE, PASSWORD_SPRAY, Alert
+from src.detection.rules import (
+    AUTH_ANOMALY, BRUTE_FORCE, ESCALATION_CHAIN, PASSWORD_SPRAY, PRIVILEGE_ABUSE, PRIVILEGE_RULES, Alert,
+)
 from src.utils.db import get_connection
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -31,6 +33,8 @@ EXPECTED_RULE = {
     "success_after_failures": AUTH_ANOMALY,
     "off_hours_new_ip_login": AUTH_ANOMALY,
     "slow_brute_force": BRUTE_FORCE,
+    "privilege_escalation": ESCALATION_CHAIN,
+    "su_bruteforce": PRIVILEGE_ABUSE,
 }
 MATCH_TOLERANCE = timedelta(seconds=60)
 
@@ -47,19 +51,24 @@ def load_labels(paths: Iterable[Path]) -> tuple[list[dict], list[tuple[datetime,
             record = {
                 "attack_type": attack["attack_type"],
                 "source_ip": attack["source_ip"],
+                # sudo / su saldırılarında IP yoktur; bunlar kullanıcı adıyla eşleştirilir.
+                "username": attack.get("username"),
                 "start": datetime.fromisoformat(attack["start_time"]),
                 "end": datetime.fromisoformat(attack["end_time"]),
             }
-            attacks[(record["attack_type"], record["source_ip"], record["start"])] = record
+            attacks[(record["attack_type"], record["source_ip"], record["username"], record["start"])] = record
     return list(attacks.values()), scopes
 
 
 def _matches(alert: Alert, attack: dict) -> bool:
-    return (
-        alert.source_ip == attack["source_ip"]
-        and alert.window_start <= attack["end"] + MATCH_TOLERANCE
+    overlaps = (
+        alert.window_start <= attack["end"] + MATCH_TOLERANCE
         and alert.window_end >= attack["start"] - MATCH_TOLERANCE
     )
+    if attack.get("username"):
+        # Yetki yükseltme saldırısı: yalnızca yetki kurallarının alarmları, hesap adıyla.
+        return overlaps and alert.rule in PRIVILEGE_RULES and alert.username == attack["username"]
+    return overlaps and alert.source_ip is not None and alert.source_ip == attack["source_ip"]
 
 
 def _ratio(part: int, whole: int):
@@ -83,6 +92,7 @@ def evaluate(attacks: list[dict], scopes: list[tuple[datetime, datetime]], alert
             missed.append({
                 "attack_type": attack["attack_type"],
                 "source_ip": attack["source_ip"],
+                "username": attack.get("username"),
                 "start": attack["start"].isoformat(),
             })
     for row in recall.values():

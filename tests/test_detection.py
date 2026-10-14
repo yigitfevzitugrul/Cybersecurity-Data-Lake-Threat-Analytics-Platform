@@ -129,3 +129,33 @@ def test_end_to_end_hard_cases_expose_rule_limits(db_conn, tmp_path):
     # Şifresini unutan kullanıcı brute_force kuralında yanlış alarm üretir.
     assert report["precision_by_rule"]["brute_force"]["false_positive"] == 5
     assert report["precision_by_rule"]["password_spray"]["precision"] == 1.0
+
+
+def test_evaluate_matches_privilege_attacks_by_username():
+    scopes = [(DAY, datetime(2026, 3, 2))]
+    attack = {"attack_type": "su_bruteforce", "source_ip": None, "username": "dave",
+              "start": DAY.replace(hour=3), "end": DAY.replace(hour=3, minute=2)}
+    abuse = Alert("privilege_abuse", "high", None, "dave", DAY.replace(hour=3), DAY.replace(hour=3, minute=2), 8, 1)
+    other_user = Alert("privilege_abuse", "high", None, "erin", DAY.replace(hour=3), DAY.replace(hour=3, minute=2), 8, 1)
+    # Aynı hesap ve zaman olsa da SSH kuralının alarmı yetki saldırısıyla eşleşmez.
+    ssh_rule = Alert("brute_force", "high", "203.0.113.1", "dave", DAY.replace(hour=3), DAY.replace(hour=3, minute=1), 40, 1)
+
+    report = evaluate([attack], scopes, [abuse, other_user, ssh_rule])
+    assert report["recall_by_attack_type"]["su_bruteforce"]["recall"] == 1.0
+    assert report["precision_by_rule"]["privilege_abuse"] == {
+        "alerts": 2, "true_positive": 1, "false_positive": 1, "precision": 0.5}
+    assert report["precision_by_rule"]["brute_force"]["false_positive"] == 1
+
+
+def test_end_to_end_privilege_escalation_is_detected(db_conn, tmp_path):
+    attacks, scopes = _load_synthetic(db_conn, tmp_path, days=5, seed=42, privilege=True)
+    summary = run_detection(db_conn, load_config())
+    report = evaluate(attacks, scopes, fetch_alerts(db_conn))
+    recall = report["recall_by_attack_type"]
+
+    assert summary["privilege_events"] > 0
+    assert recall["privilege_escalation"] == {"attacks": 5, "detected": 5, "recall": 1.0}
+    assert recall["su_bruteforce"] == {"attacks": 5, "detected": 5, "recall": 1.0}
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM alerts WHERE rule = 'escalation_chain' AND severity = 'critical'")
+        assert cur.fetchone()[0] >= 5

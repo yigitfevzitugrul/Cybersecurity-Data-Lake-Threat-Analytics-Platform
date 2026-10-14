@@ -3,17 +3,24 @@
 Kurallar saf fonksiyonlardır: zamana göre sıralı olay listesi ve eşik
 sözlüğü alır, alarm listesi döndürür. Veritabanına dokunmazlar.
 """
+import re
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Iterable, NamedTuple, Optional
 
-from src.etl.parser import LOGIN_FAILED, LOGIN_SUCCESS
+from src.etl.parser import LOGIN_FAILED, LOGIN_SUCCESS, SU_FAILURE, SUDO_AUTH_FAILURE, SUDO_COMMAND, SUDO_NOT_ALLOWED
 
 BRUTE_FORCE = "brute_force"
 PASSWORD_SPRAY = "password_spray"
 SUSPICIOUS_IP = "suspicious_ip"
 AUTH_ANOMALY = "auth_anomaly"
+PRIVILEGE_ABUSE = "privilege_abuse"
+SENSITIVE_COMMAND = "sensitive_command"
+ESCALATION_CHAIN = "escalation_chain"
+PRIVILEGE_RULES = (PRIVILEGE_ABUSE, SENSITIVE_COMMAND, ESCALATION_CHAIN)
+
+PRIVILEGE_FAILURE_TYPES = (SUDO_AUTH_FAILURE, SUDO_NOT_ALLOWED, SU_FAILURE)
 
 # auth_anomaly sebepleri
 SUCCESS_AFTER_FAILURES = "success_after_failures"
@@ -31,11 +38,22 @@ class Event(NamedTuple):
     attempts: int  # repeat_count
 
 
+class PrivEvent(NamedTuple):
+    time: datetime
+    host: str
+    program: str
+    event_type: str
+    username: str
+    target_user: str
+    command: Optional[str]
+    attempts: int
+
+
 @dataclass
 class Alert:
     rule: str
     severity: str
-    source_ip: str
+    source_ip: Optional[str]  # sudo / su alarmlarında kaynak IP yoktur
     username: Optional[str]  # birden çok kullanıcı hedeflendiyse None
     window_start: datetime
     window_end: datetime
@@ -244,6 +262,110 @@ def detect_auth_anomaly(events: list[Event], cfg: dict) -> list[Alert]:
     return alerts
 
 
+def detect_privilege_abuse(events: list[PrivEvent], cfg: dict) -> list[Alert]:
+    """Aynı kullanıcının kısa sürede art arda başarısız yetki girişimleri (sudo / su)."""
+    window = timedelta(minutes=cfg["window_minutes"])
+    groups = defaultdict(list)
+    for event in events:
+        if event.event_type in PRIVILEGE_FAILURE_TYPES:
+            groups[event.username].append(event)
+    alerts = []
+    for username, failures in groups.items():
+        for session in _sessions(failures, window):
+            total = sum(e.attempts for e in session)
+            if total < cfg["min_failures"]:
+                continue
+            by_type: Counter = Counter()
+            for e in session:
+                by_type[e.event_type] += e.attempts
+            alerts.append(Alert(
+                rule=PRIVILEGE_ABUSE,
+                severity="high" if total >= cfg["high_severity_failures"] else "medium",
+                source_ip=None,
+                username=username,
+                window_start=session[0].time,
+                window_end=session[-1].time,
+                attempt_count=total,
+                distinct_users=1,
+                details={
+                    "failures_by_type": dict(by_type),
+                    "target_users": sorted({e.target_user for e in session}),
+                    "hosts": sorted({e.host for e in session}),
+                },
+            ))
+    return alerts
+
+
+def detect_sensitive_command(events: list[PrivEvent], cfg: dict) -> list[Alert]:
+    """sudo ile çalıştırılan hassas komutlar (parola dosyası, sudoers, kullanıcı yönetimi, setuid)."""
+    patterns = [re.compile(p) for p in cfg["patterns"]]
+    gap = timedelta(minutes=cfg["session_gap_minutes"])
+    groups = defaultdict(list)
+    for event in events:
+        if event.event_type == SUDO_COMMAND and event.command and any(p.search(event.command) for p in patterns):
+            groups[event.username].append(event)
+    alerts = []
+    for username, hits in groups.items():
+        for session in _sessions(hits, gap):
+            alerts.append(Alert(
+                rule=SENSITIVE_COMMAND,
+                severity="high",
+                source_ip=None,
+                username=username,
+                window_start=session[0].time,
+                window_end=session[-1].time,
+                attempt_count=0,
+                distinct_users=1,
+                details={
+                    "commands": [e.command for e in session][:10],
+                    "target_users": sorted({e.target_user for e in session}),
+                    "hosts": sorted({e.host for e in session}),
+                },
+            ))
+    return alerts
+
+
+def detect_escalation_chain(events: list[PrivEvent], auth_alerts: list[Alert], cfg: dict) -> list[Alert]:
+    """Şüpheli bir girişin ardından aynı hesapla yapılan yetki etkinliği: saldırı zinciri.
+
+    Tetikleyici, auth_anomaly kuralının high / critical alarmlarıdır: bilinmeyen bir IP'den
+    çok başarısızlık sonrası giriş ya da gece yeni bir IP'den giriş. sudo / su kayıtlarında
+    IP olmadığı için zincir, hesap adı ve zaman üzerinden kurulur.
+    """
+    follow = timedelta(minutes=cfg["follow_minutes"])
+    by_user = defaultdict(list)
+    for event in events:
+        by_user[event.username].append(event)
+    alerts = []
+    for login in auth_alerts:
+        if login.rule != AUTH_ANOMALY or login.severity not in ("high", "critical"):
+            continue
+        after = [e for e in by_user.get(login.username, [])
+                 if login.window_end <= e.time <= login.window_end + follow]
+        if not after:
+            continue
+        by_type: Counter = Counter()
+        for e in after:
+            by_type[e.event_type] += e.attempts
+        alerts.append(Alert(
+            rule=ESCALATION_CHAIN,
+            severity="critical",
+            source_ip=login.source_ip,
+            username=login.username,
+            window_start=login.window_start,
+            window_end=after[-1].time,
+            attempt_count=sum(e.attempts for e in after if e.event_type in PRIVILEGE_FAILURE_TYPES),
+            distinct_users=1,
+            details={
+                "login_reasons": login.details.get("reasons", []),
+                "privilege_events": dict(by_type),
+                "commands": [e.command for e in after if e.command][:10],
+                "minutes_after_login": round((after[0].time - login.window_end).total_seconds() / 60, 1),
+            },
+        ))
+    return alerts
+
+
 DETECTORS = {
     BRUTE_FORCE: detect_brute_force,
     PASSWORD_SPRAY: detect_password_spray,
@@ -252,9 +374,15 @@ DETECTORS = {
 }
 
 
-def run_rules(events: list[Event], config: dict) -> list[Alert]:
-    """Bütün kuralları çalıştırır. `events` zamana göre sıralı olmalıdır."""
+def run_rules(events: list[Event], config: dict, privilege_events: Iterable[PrivEvent] = ()) -> list[Alert]:
+    """Bütün kuralları çalıştırır. İki olay listesi de zamana göre sıralı olmalıdır."""
     alerts = []
     for rule, detector in DETECTORS.items():
         alerts.extend(detector(events, config[rule]))
-    return sorted(alerts, key=lambda a: (a.window_start, a.rule, a.source_ip, a.username or ""))
+    privilege_events = list(privilege_events)
+    if privilege_events:
+        auth_alerts = list(alerts)
+        alerts.extend(detect_privilege_abuse(privilege_events, config[PRIVILEGE_ABUSE]))
+        alerts.extend(detect_sensitive_command(privilege_events, config[SENSITIVE_COMMAND]))
+        alerts.extend(detect_escalation_chain(privilege_events, auth_alerts, config[ESCALATION_CHAIN]))
+    return sorted(alerts, key=lambda a: (a.window_start, a.rule, a.source_ip or "", a.username or ""))
