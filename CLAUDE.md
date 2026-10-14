@@ -135,5 +135,6 @@ dags/  grafana/  tests/  docs/
   - Bellekte 3 tohum × 10 gün: iki yeni tür recall %100; tek yanlış alarm (seed 21) şifresini unutan yöneticinin ilk girişi + olağan sudo → escalation_chain. Bilinçli bırakıldı.
   - Testler: 159 test (CI'da veritabanıyla geçti). Git push için `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push` gerekiyor; Windows kimlik yöneticisindeki token geçersiz.
   - Docker'da doğrulandı: DAG `privilege=True` ile çalıştı (bütün adımlar success, bulut adımları skipped); güvenlik dashboard'una 2 panel (yetki girişimleri, saldırı zincirleri) eklendi ve tarayıcıda kontrol edildi; "En çok alarm üreten IP'ler" IP'siz alarmları dışarıda bırakıyor. Geliştirme DB (12 gün, 84 saldırı, 136 alarm): privilege_escalation 12/12, su_bruteforce 12/12; privilege_abuse 19/19, sensitive_command 5/5, escalation_chain 12/12 doğru; genel recall %85,7, precision %82,3, high/critical precision %100 (79 alarm).
-  - Yapılmadı: privilege_events'in bulut (S3/Glue) dışa aktarımı; rapor ve sunumun güncellenmesi.
+  - Yapılmadı: privilege_events'in bulut (S3/Glue) dışa aktarımı (Ocak'ta bucket kurulurken).
+- 2026-10-14 karar: rapor (Claude Doc) ve sunum (Slides artifact) **en sonda, bütün özellikler bittikten sonra baştan yazılacak**; ara özellik eklemelerinde güncelleme. Yeni özellik eklenebilir.
 - Sıradaki: H7–8 — rapor, sunum, demo videosu. PySpark opsiyonel, önerilmiyor.
