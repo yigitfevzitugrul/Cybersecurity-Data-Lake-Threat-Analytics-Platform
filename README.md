@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/yigitfevzitugrul/Cybersecurity-Data-Lake-Threat-Analytics-Platform/actions/workflows/tests.yml/badge.svg)](https://github.com/yigitfevzitugrul/Cybersecurity-Data-Lake-Threat-Analytics-Platform/actions/workflows/tests.yml)
 
-SSH kimlik doğrulama loglarını toplayan, ETL'den geçiren, veri kalitesini denetleyen, tehditleri kural tabanlı olarak tespit eden, sonuçları Grafana'da gösteren ve veriyi AWS üzerinde bir data lake'e taşıyan uçtan uca bir veri mühendisliği projesi.
+Linux kimlik doğrulama loglarını (SSH girişleri ve sudo / su yetki yükseltme denemeleri) toplayan, ETL'den geçiren, veri kalitesini denetleyen, tehditleri kural tabanlı olarak tespit eden, sonuçları Grafana'da gösteren ve veriyi AWS üzerinde bir data lake'e taşıyan uçtan uca bir veri mühendisliği projesi.
 
 Bilişim Sistemleri Mühendisliği bitirme projesi olarak geliştirilmiştir.
 
@@ -56,10 +56,11 @@ flowchart LR
 
 ```
 data/raw/*.log ──extract──▶ transform ──▶ validate ──▶ load ──▶ PostgreSQL
-                              │              │           ├─ auth_events      (geçerli olaylar)
+                              │              │           ├─ auth_events      (SSH girişleri)
+                              │              │           ├─ privilege_events (sudo / su denemeleri)
                               └──────────────┴──────────▶├─ rejected_events  (karantina + red sebebi)
                                                          └─ pipeline_runs    (her çalıştırmanın denetim kaydı)
-                                             auth_events ──detect──▶ alerts  (tespit kurallarının alarmları)
+                          auth_events + privilege_events ──detect──▶ alerts  (tespit kurallarının alarmları)
                                                        data/processed/*.jsonl
 ```
 
@@ -128,6 +129,11 @@ Kurallar `src/detection/rules.py` içinde, eşikler [config/detection_rules.yaml
 | `password_spray` | Aynı IP'den çok farklı kullanıcıya, her birine az deneme | 30 dakikada 10 kullanıcı, kullanıcı başına ortalama en fazla 3 deneme |
 | `suspicious_ip` | `root` ya da var olmayan kullanıcılara yönelik denemeler; çok sunucuyu yoklayan IP | 60 dakikada 5 deneme ya da 3 farklı sunucu |
 | `auth_anomaly` | Olağandışı başarılı giriş: çok başarısızlıktan sonra giriş, kullanıcı için yeni IP, mesai dışı saat | 5 başarısız deneme / 3 girişlik geçmiş / 07:00–20:00 dışı |
+| `privilege_abuse` | Aynı kullanıcının art arda başarısız yetki girişimleri: yanlış sudo parolası, sudo yetkisi olmadan sudo, başarısız su | 10 dakikada 3 başarısız girişim |
+| `sensitive_command` | sudo ile çalıştırılan hassas komutlar: `/etc/shadow`, sudoers, kullanıcı yönetimi, setuid | Komut kalıpları ayar dosyasında |
+| `escalation_chain` | **Saldırı zinciri:** şüpheli bir girişin (`auth_anomaly` high / critical) ardından aynı hesapla yapılan sudo / su etkinliği | Girişten sonraki 60 dakika |
+
+sudo / su kayıtlarında kaynak IP bulunmaz. Bu yüzden `escalation_chain`, SSH girişini ve yetki denemesini hesap adı ve zaman üzerinden bağlar; alarm, girişin geldiği IP'yi taşır.
 
 ```powershell
 python -m src.detection.engine            # kuralları çalıştır, alarmları yaz
@@ -167,6 +173,32 @@ Bu sonuçlar kural tabanlı tespitin bilinen sınırlarını gösterir:
 - Yavaş brute force, kayan pencere eşiğinin altında kaldığı için `brute_force` kuralıyla yakalanamaz. Hedef `root` olduğunda `suspicious_ip` kuralı yine de alarm üretir (saldırıların %84'ü en az bir kuralla yakalanır).
 - Yanlış alarmların tamamı şifresini unutan kullanıcıdan gelir. `auth_anomaly`, giriş kullanıcının bilinen IP'sinden geldiğinde önem derecesini `medium`'a düşürür; `brute_force` ise kullanıcı geçmişine bakmadığı için bunu ayırt edemez.
 - Sonuçlar sentetik veriye aittir; gerçek trafikte oranlar farklı olacaktır. Loghub verisinin etiketi olmadığı için ölçüme girmez.
+
+### Yetki yükseltme tespiti
+
+Üreteç `--privilege` ile yöneticilerin olağan sudo komutlarını ve iki saldırı türünü ekler:
+
+- **privilege_escalation:** o günün "başarısızlıklar sonrası başarılı giriş" saldırısında ele geçirilen hesapla, girişten birkaç dakika sonra sudo / su denemesi. Hesap yöneticiyse saldırgan parolayı bildiği için komutlar çalışır (`/etc/shadow` okuma, root yetkili gizli kullanıcı ekleme); değilse sudo reddedilir ve root parolası denenir.
+- **su_bruteforce:** sudo yetkisi olmayan bir kullanıcının art arda root parolası denemesi.
+
+`--hard-cases` ile iki zararsız benzer de eklenir: sudo yetkisi olmayan yeni bir çalışanın tek bir sudo denemesi ve bir yöneticinin akşam saatinde açtığı root kabuğu.
+
+Geliştirme veritabanındaki 12 günlük veride (12 privilege_escalation, 12 su_bruteforce):
+
+| Saldırı tipi | Beklenen kural | Yakalanan |
+|---|---|---|
+| Ele geçirilen hesapla yetki yükseltme | `escalation_chain` | 12/12 |
+| İçeriden root parolası denemesi | `privilege_abuse` | 12/12 |
+
+| Kural | Doğru alarm |
+|---|---|
+| `privilege_abuse` | 19/19 |
+| `sensitive_command` | 5/5 |
+| `escalation_chain` | 12/12 |
+
+Zararsız benzerler (yeni çalışanın tek sudo denemesi, yöneticinin root kabuğu) alarm üretmedi. Aynı ölçüm üç farklı tohumla üretilmiş 10'ar günlük veride de tekrarlandı; birinde `escalation_chain` bir yanlış alarm verdi: şifresini unutup ilk kez giriş yapan bir yönetici, hemen ardından olağan bir sudo komutu çalıştırdı. Kullanıcının geçmişi henüz olmadığı için giriş şüpheli sayıldı ve zincir kuruldu.
+
+![Yetki yükseltme panelleri](docs/screenshots/grafana_privilege_panels.png)
 
 ## AWS Data Lake
 
@@ -236,7 +268,7 @@ python -m src.etl.pipeline data/raw/OpenSSH_2k.log --year 2025
 Sentetik veri: gömülü saldırılar (brute force, password spraying, başarısızlıklar sonrası başarılı giriş, gece saatinde yeni IP'den giriş), isteğe bağlı bozuk satırlar (`--bad-ratio`) ve kuralları zorlayan durumlar (`--hard-cases`) içerir. Saldırı etiketleri `data/raw/synthetic_auth_labels.json` dosyasına yazılır.
 
 ```powershell
-python -m src.generator.generate --start-date 2026-09-01 --days 7 --seed 42 --bad-ratio 0.02 --hard-cases
+python -m src.generator.generate --start-date 2026-09-01 --days 7 --seed 42 --bad-ratio 0.02 --hard-cases --privilege
 python -m src.etl.pipeline data/raw/synthetic_auth.log --year 2026
 ```
 
@@ -278,5 +310,6 @@ data/{raw,processed,curated}/  yerel veri katmanları (git'e girmez)
 - Tespit kural tabanlıdır: eşiklerin altında kalan yavaş saldırıları kaçırır, şifresini unutan kullanıcıyı saldırıdan ayıramaz (bkz. [Doğruluk ölçümü](#doğruluk-ölçümü)).
 - Tespit her çalıştırmada bütün olayları yeniden değerlendirir. Bu veri boyutunda sorun değildir; veri büyüdüğünde geriye bakış penceresi gerekir.
 - Syslog satırlarında yıl yoktur. Yıl dosya tarihinden tahmin edilir; bir yıldan eski ya da yıl sınırını aşan dosyalarda `--year` elle verilmelidir.
-- Yalnızca OpenSSH `Failed` / `Accepted` satırları olay sayılır; diğer servislerin logları kapsam dışıdır.
+- Yalnızca SSH `Failed` / `Accepted` satırları ve sudo / su kayıtları olay sayılır. sudo kullanmadan yapılan yetki yükseltmeleri (ör. bir açığın sömürülmesi) bu kayıtlarda görünmez; onlar için `auditd` gibi bir kaynak gerekir.
+- sudo / su kayıtlarında kaynak IP olmadığı için saldırı zinciri hesap adı ve zamanla kurulur; aynı hesabı aynı anda kullanan meşru bir oturum zincire karışabilir.
 - Doğruluk sonuçları sentetik veriye aittir. Gerçek Loghub verisinin etiketi olmadığı için ölçüme girmez.

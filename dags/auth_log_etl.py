@@ -43,7 +43,7 @@ def auth_log_etl():
         out = RAW_DIR / f"synthetic_auth_{ds}.log"
         # Seed güne bağlıdır: aynı gün tekrar üretilirse aynı dosya çıkar ve yeniden işlenmez.
         lines, labels = generate(
-            day, days=1, seed=day.toordinal(), bad_ratio=SYNTHETIC_BAD_RATIO, hard_cases=True
+            day, days=1, seed=day.toordinal(), bad_ratio=SYNTHETIC_BAD_RATIO, hard_cases=True, privilege=True
         )
         write_files(out, lines, labels)
         print(f"{out.name}: {len(lines)} satır, {len(labels['attacks'])} saldırı")

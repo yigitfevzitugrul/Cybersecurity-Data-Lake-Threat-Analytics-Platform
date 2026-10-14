@@ -478,6 +478,51 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*privilege_abuse.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*sensitive_command.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "dark-red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*escalation_chain.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "dark-purple"
+                }
+              }
+            ]
           }
         ]
       }
@@ -646,7 +691,7 @@
       "id": 10,
       "type": "table",
       "title": "En çok alarm üreten IP'ler",
-      "description": "",
+      "description": "Kaynak IP'si olan alarmlar; sudo / su alarmlarında IP bulunmaz.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "secdl-postgres"
@@ -667,7 +712,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT host(source_ip) AS \"Kaynak IP\", COUNT(*) AS \"Alarm\",\n       string_agg(DISTINCT rule, ', ' ORDER BY rule) AS \"Kurallar\",\n       (ARRAY_AGG(severity ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END))[1] AS \"En yüksek önem\",\n       MAX(attempt_count) AS \"En çok deneme\", MAX(window_end) AS \"Son görülme\"\nFROM alerts\nWHERE $__timeFilter(window_start)\nGROUP BY source_ip\nORDER BY MIN(CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END), COUNT(*) DESC, MAX(attempt_count) DESC\nLIMIT 15"
+          "rawSql": "SELECT host(source_ip) AS \"Kaynak IP\", COUNT(*) AS \"Alarm\",\n       string_agg(DISTINCT rule, ', ' ORDER BY rule) AS \"Kurallar\",\n       (ARRAY_AGG(severity ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END))[1] AS \"En yüksek önem\",\n       MAX(attempt_count) AS \"En çok deneme\", MAX(window_end) AS \"Son görülme\"\nFROM alerts\nWHERE source_ip IS NOT NULL AND $__timeFilter(window_start)\nGROUP BY source_ip\nORDER BY MIN(CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END), COUNT(*) DESC, MAX(attempt_count) DESC\nLIMIT 15"
         }
       ],
       "options": {
@@ -763,6 +808,178 @@
             "fixedColor": "orange"
           }
         },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Yetki yükseltme girişimleri (sudo / su)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "secdl-postgres"
+      },
+      "description": "Günlük sudo / su olayları; başarısız sudo denemeleri sudo'nun bildirdiği parola sayısıyla ağırlıklandırılır.",
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "secdl-postgres"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT $__timeGroupAlias(event_time, '1d'), event_type AS metric, SUM(attempts) AS value\nFROM privilege_events\nWHERE $__timeFilter(event_time)\nGROUP BY 1, 2\nORDER BY 1"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 1,
+            "barWidthFactor": 0.6,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^| )sudo_command$"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^| )su_success$"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^| )sudo_auth_failure$"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^| )sudo_not_allowed$"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^| )su_failure$"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Saldırı zincirleri: şüpheli girişten sonra yetki yükseltme",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "secdl-postgres"
+      },
+      "description": "escalation_chain alarmları: şüpheli bir girişin ardından aynı hesapla yapılan sudo / su etkinliği.",
+      "gridPos": {
+        "x": 12,
+        "y": 33,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "secdl-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT window_start AS \"Giriş\", username AS \"Hesap\", host(source_ip) AS \"Kaynak IP\",\n       (details->>'minutes_after_login')::numeric AS \"Girişten sonra (dk)\",\n       attempt_count AS \"Başarısız yetki denemesi\",\n       COALESCE((SELECT string_agg(c, ', ') FROM jsonb_array_elements_text(details->'commands') c), '') AS \"Komutlar\"\nFROM alerts\nWHERE rule = 'escalation_chain' AND $__timeFilter(window_start)\nORDER BY window_start DESC\nLIMIT 20"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
         "overrides": []
       }
     }
