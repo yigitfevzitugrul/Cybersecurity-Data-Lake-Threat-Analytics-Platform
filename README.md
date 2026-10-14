@@ -38,7 +38,7 @@ flowchart LR
 
 | Katman | Teknoloji |
 |---|---|
-| Dil ve test | Python 3.12, pytest (185 test), GitHub Actions |
+| Dil ve test | Python 3.12, pytest (191 test), GitHub Actions |
 | Depolama | PostgreSQL 16; S3 üzerinde Parquet |
 | Orkestrasyon | Apache Airflow 2.10 |
 | Görselleştirme | Grafana 11 (kod olarak tanımlı veri kaynağı ve dashboard'lar) |
@@ -137,12 +137,13 @@ Kurallar `src/detection/rules.py` içinde, eşikler [config/detection_rules.yaml
 sudo / su kayıtlarında kaynak IP bulunmaz. Bu yüzden `escalation_chain`, SSH girişini ve yetki denemesini hesap adı ve zaman üzerinden bağlar; alarm, girişin geldiği IP'yi taşır.
 
 ```powershell
-python -m src.detection.engine            # kuralları çalıştır, alarmları yaz
+python -m src.detection.engine            # artımlı: yalnızca yeni olaylar + öncesindeki 24 saat
+python -m src.detection.engine --full     # bütün geçmişi yeniden değerlendir
 python -m src.detection.engine --reset    # eşik değiştirdikten sonra: eski alarmları silip yeniden üret
 python -m src.detection.evaluate          # doğruluğu sentetik etiketlere karşı ölç
 ```
 
-Tespit her çalıştığında bütün olayları yeniden değerlendirir; aynı alarm ikinci kez eklenmez, güncellenir.
+Tespit artımlıdır (bkz. [Ölçeklenebilirlik](#ölçeklenebilirlik)); aynı alarm ikinci kez eklenmez, güncellenir. Her çalıştırma `detection_runs` tablosuna kaydedilir.
 
 ![Güvenlik dashboard'u](docs/screenshots/grafana_security_overview.jpg)
 
@@ -238,6 +239,37 @@ DAG'deki `enrich_geoip` adımı yeni IP'leri her gün çözer; veritabanı dosya
 - Konum bugünkü veritabanına göredir; eski loglardaki bir IP o tarihte başka bir yerde olabilir.
 
 IP konum verisi: IP Geolocation by DB-IP, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+## Ölçeklenebilirlik
+
+Tespit motoru her çalıştırmada bütün geçmişi okusaydı, süresi veriyle doğrusal büyürdü. Bu yüzden varsayılan mod **artımlıdır**:
+
+- Son çalıştırmanın gördüğü en büyük olay kimlikleri (`detection_runs` tablosu) filigran olarak tutulur; ondan büyük kimlikli olaylar "yeni"dir. Kimlik kullanıldığı için geç gelen eski tarihli bir log dosyası da yakalanır.
+- Yeni olayların en erkeninden **24 saat öncesine** kadar olan olaylar okunur (`config/detection_rules.yaml` → `incremental.lookback_hours`); bütün kural pencereleri bundan çok kısadır.
+- `auth_anomaly`'nin ihtiyaç duyduğu "kullanıcı bu IP'den daha önce girdi mi?" geçmişi, pencereden öncesi için SQL ile özetlenir.
+- Yalnızca yeni olaylara dokunabilen alarmlar yazılır; alarmlar ve çalıştırma kaydı tek transaction'dadır.
+
+Doğruluğu bir testle güvenceye alınır: günler tek tek (biri sırasından geç) yüklenip her seferinde artımlı tespit çalıştırıldığında, sonuç bütün geçmişin tek seferde değerlendirilmesiyle **birebir aynıdır** (`test_incremental_detection_matches_full_detection`).
+
+Ölçüm aracı, üreteçle yoğun internet gürültülü bir veri seti oluşturup günleri Airflow'un yaptığı gibi sırayla yükler; her günden sonra iki ayrı geçici şemada artımlı ve tam tespiti çalıştırır. Geliştirme verisine dokunmaz.
+
+```powershell
+python -m src.benchmark.scale --days 60 --noise 1500   # sonuç: data/curated/benchmark.json
+```
+
+60 gün, günde ~1500 gürültü IP'si (565 bin log satırı, 194 bin olay, 4279 alarm) üzerindeki sonuç ([docs/benchmark/benchmark_60d.json](docs/benchmark/benchmark_60d.json)):
+
+| Ölçüm | Sonuç |
+|---|---|
+| ETL hızı (parse + doğrulama + yükleme) | medyan ~27.500 satır/sn, gün başına ~0,35 sn |
+| Son gün tespit süresi | artımlı **87 ms** (6.386 olay okur), tam **1.243 ms** (194.315 olay okur), ~14 kat |
+| 60 günün toplam tespit süresi | artımlı 5,5 sn, tam 40,7 sn |
+| Artımlı ve tam tespitin alarmları | aynı (4279 alarm) |
+| Depolama | ham log 52,6 MB → Parquet 19,3 MB (2,7 kat, gün başına bir dosya) |
+
+![Tespit süresi](docs/benchmark/detection_time.png)
+
+Artımlı tespitin süresi veri hacmine değil, günlük olay sayısına bağlıdır; tam tespit ise doğrusal büyür. Ölçüm tek bir dizüstü bilgisayarda, Docker içindeki PostgreSQL ile yapıldı; mutlak süreler makineye göre değişir, oran ve eğilim önemlidir. Parquet oranı ılımlıdır çünkü her satır sıkıştırılamayan 64 karakterlik `event_hash` taşır; ham logdaki ilgisiz satırlar ise Parquet'e hiç girmez.
 
 ## AWS Data Lake
 
@@ -339,7 +371,8 @@ sql/schema/                    tablo tanımları (sırayla uygulanır)
 sql/analysis/, sql/athena/     PostgreSQL ve Athena analiz sorguları
 src/generator/                 sentetik log üreteci
 src/etl/                       extract, parser, transform, validate, load, pipeline
-src/detection/                 kurallar, tespit motoru, MITRE ATT&CK eşlemesi, doğruluk ölçümü
+src/detection/                 kurallar, artımlı tespit motoru, MITRE ATT&CK eşlemesi, doğruluk ölçümü
+src/benchmark/                 ölçeklenebilirlik testi
 src/cloud/                     AWS kurulumu, S3 senkronu, Athena, tutarlılık kontrolü
 tests/                         pytest testleri
 data/{raw,processed,curated}/  yerel veri katmanları (git'e girmez)
@@ -348,7 +381,7 @@ data/{raw,processed,curated}/  yerel veri katmanları (git'e girmez)
 ## Bilinen sınırlar
 
 - Tespit kural tabanlıdır: eşiklerin altında kalan yavaş saldırıları kaçırır, şifresini unutan kullanıcıyı saldırıdan ayıramaz (bkz. [Doğruluk ölçümü](#doğruluk-ölçümü)).
-- Tespit her çalıştırmada bütün olayları yeniden değerlendirir. Bu veri boyutunda sorun değildir; veri büyüdüğünde geriye bakış penceresi gerekir.
+- Artımlı tespit 24 saatlik geriye bakış penceresi kullanır; 24 saatten uzun süren ve aralarında kural penceresinden kısa boşluklar olan bir saldırı oturumu artımlı modda bölünebilir. Gerekirse `--full` bütün geçmişi yeniden değerlendirir.
 - Syslog satırlarında yıl yoktur. Yıl dosya tarihinden tahmin edilir; bir yıldan eski ya da yıl sınırını aşan dosyalarda `--year` elle verilmelidir.
 - Yalnızca SSH `Failed` / `Accepted` satırları ve sudo / su kayıtları olay sayılır. sudo kullanmadan yapılan yetki yükseltmeleri (ör. bir açığın sömürülmesi) bu kayıtlarda görünmez; onlar için `auditd` gibi bir kaynak gerekir.
 - sudo / su kayıtlarında kaynak IP olmadığı için saldırı zinciri hesap adı ve zamanla kurulur; aynı hesabı aynı anda kullanan meşru bir oturum zincire karışabilir.

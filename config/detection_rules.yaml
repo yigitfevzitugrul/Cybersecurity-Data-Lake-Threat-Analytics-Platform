@@ -1,6 +1,13 @@
 # Tespit kurallarının eşikleri. Değiştirdikten sonra:
 #   python -m src.detection.engine --reset
 #
+# Tespit varsayılan olarak artımlıdır: yalnızca son çalıştırmadan beri yüklenen olaylar
+# ve onlardan önceki lookback_hours saat yeniden değerlendirilir. Bundan uzun süren bir
+# saldırı oturumu artımlı modda bölünebilir; bu yüzden pencere, aşağıdaki bütün kural
+# pencerelerinden çok daha uzun tutulur.
+incremental:
+  lookback_hours: 24
+#
 # "Oturum": aynı anahtara (ör. IP) ait, aralarında window_minutes'tan uzun
 # boşluk olmayan ardışık olaylar. Her oturum en fazla bir alarm üretir.
 

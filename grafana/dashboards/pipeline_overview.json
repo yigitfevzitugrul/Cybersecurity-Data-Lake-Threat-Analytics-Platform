@@ -610,6 +610,76 @@
           }
         ]
       }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Son tespit çalıştırmaları",
+      "description": "Zaman aralığından bağımsız: en son 20 tespit çalıştırması. Artımlı mod yalnızca yeni olayları ve öncesindeki geriye bakış penceresini okur; tam mod bütün geçmişi.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "secdl-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "secdl-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT run_id AS \"No\", started_at AS \"Başlangıç\", mode AS \"Mod\",\n       COALESCE(to_char(eval_start, 'YYYY-MM-DD HH24:MI'), 'bütün geçmiş') AS \"Değerlendirilen aralık\",\n       events_evaluated + privilege_events_evaluated AS \"Okunan olay\",\n       alerts_written AS \"Yazılan alarm\", new_alerts AS \"Yeni alarm\", duration_ms AS \"Süre (ms)\"\nFROM detection_runs\nORDER BY run_id DESC\nLIMIT 20"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Mod"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "incremental": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "full": {
+                        "color": "blue",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

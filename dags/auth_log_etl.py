@@ -7,7 +7,8 @@
 generate_daily_log gerçek bir log kaynağını taklit eder: çalıştırmanın mantıksal
 günü için sentetik bir log dosyası üretir. run_etl, data/raw altındaki henüz
 işlenmemiş tüm *.log dosyalarını pipeline'dan geçirir. detect_threats tespit
-kurallarını çalıştırıp alarmları yazar. enrich_geoip yeni kaynak IP'leri yerel
+kurallarını artımlı çalıştırıp (yalnızca yeni olaylar ve öncesindeki pencere)
+alarmları yazar. enrich_geoip yeni kaynak IP'leri yerel
 DB-IP veritabanıyla ülke / şehirle eşleştirir (dosya yoksa atlanır). sync_to_cloud katmanları S3'e gönderir,
 reconcile_cloud yerel veritabanı ile Athena'nın aynı sayıları verdiğini doğrular.
 Bulut adımları sadece CLOUD_SYNC_ENABLED=true iken çalışır (docker-compose.cloud.yml);

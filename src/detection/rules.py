@@ -203,11 +203,17 @@ def detect_suspicious_ip(events: list[Event], cfg: dict) -> list[Alert]:
     return alerts
 
 
-def detect_auth_anomaly(events: list[Event], cfg: dict) -> list[Alert]:
-    """Olağandışı başarılı girişler: çok başarısızlık sonrası giriş, yeni IP, mesai dışı saat."""
+def detect_auth_anomaly(events: list[Event], cfg: dict, login_history: Optional[dict] = None) -> list[Alert]:
+    """Olağandışı başarılı girişler: çok başarısızlık sonrası giriş, yeni IP, mesai dışı saat.
+
+    `login_history` ({kullanıcı: {ip: başarılı giriş sayısı}}), olay listesinden önceki
+    geçmiştir; artımlı tespitte veritabanından özetlenip verilir.
+    """
     window = timedelta(minutes=cfg["window_minutes"])
     recent_failures: dict[str, deque] = defaultdict(deque)  # ip → (zaman, deneme)
-    login_history: dict[str, Counter] = defaultdict(Counter)  # kullanıcı → IP başına başarılı giriş
+    history_by_user: dict[str, Counter] = defaultdict(Counter)  # kullanıcı → IP başına başarılı giriş
+    for user, ips in (login_history or {}).items():
+        history_by_user[user].update(ips)
     alerts = []
     for event in events:
         if event.event_type == LOGIN_FAILED:
@@ -220,7 +226,7 @@ def detect_auth_anomaly(events: list[Event], cfg: dict) -> list[Alert]:
         while failures and event.time - failures[0][0] > window:
             failures.popleft()
         prior_failures = sum(attempts for _, attempts in failures)
-        history = login_history[event.username]
+        history = history_by_user[event.username]
 
         reasons = []
         if prior_failures >= cfg["min_prior_failures"]:
@@ -380,15 +386,23 @@ DETECTORS = {
     BRUTE_FORCE: detect_brute_force,
     PASSWORD_SPRAY: detect_password_spray,
     SUSPICIOUS_IP: detect_suspicious_ip,
-    AUTH_ANOMALY: detect_auth_anomaly,
 }
 
 
-def run_rules(events: list[Event], config: dict, privilege_events: Iterable[PrivEvent] = ()) -> list[Alert]:
-    """Bütün kuralları çalıştırır. İki olay listesi de zamana göre sıralı olmalıdır."""
+def run_rules(
+    events: list[Event],
+    config: dict,
+    privilege_events: Iterable[PrivEvent] = (),
+    login_history: Optional[dict] = None,
+) -> list[Alert]:
+    """Bütün kuralları çalıştırır. İki olay listesi de zamana göre sıralı olmalıdır.
+
+    `login_history`, olaylardan önceki başarılı girişlerin özetidir (bkz. detect_auth_anomaly).
+    """
     alerts = []
     for rule, detector in DETECTORS.items():
         alerts.extend(detector(events, config[rule]))
+    alerts.extend(detect_auth_anomaly(events, config[AUTH_ANOMALY], login_history))
     privilege_events = list(privilege_events)
     if privilege_events:
         auth_alerts = list(alerts)

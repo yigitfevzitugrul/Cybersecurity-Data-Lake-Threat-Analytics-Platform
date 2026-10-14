@@ -89,10 +89,15 @@ def test_detection_is_idempotent_and_reset_clears_alerts(db_conn, tmp_path):
     config = load_config()
 
     first = run_detection(db_conn, config)
+    assert first["mode"] == "full"  # ilk çalıştırma bütün geçmişi değerlendirir
     assert first["alerts"] > 0
     assert (first["new_alerts"], first["updated_alerts"]) == (first["alerts"], 0)
 
-    second = run_detection(db_conn, config)
+    # Yeni olay yoksa artımlı çalıştırma hiçbir şey okumaz ve yazmaz.
+    idle = run_detection(db_conn, config)
+    assert (idle["mode"], idle["events"], idle["alerts"]) == ("incremental", 0, 0)
+
+    second = run_detection(db_conn, config, full=True)
     assert (second["new_alerts"], second["updated_alerts"]) == (0, first["alerts"])
     assert len(fetch_alerts(db_conn)) == first["alerts"]
 
@@ -175,3 +180,44 @@ def test_alerts_are_tagged_with_attack_techniques(db_conn, tmp_path):
         assert cur.fetchall() == []
         cur.execute("SELECT mitre_techniques FROM alerts WHERE rule = 'sensitive_command'")
         assert {t for (techniques,) in cur.fetchall() for t in techniques} >= {"T1003.008", "T1136.001"}
+
+
+def _alert_rows(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT alert_hash, severity, window_end, attempt_count, distinct_users, details, mitre_techniques "
+            "FROM alerts ORDER BY alert_hash"
+        )
+        return cur.fetchall()
+
+
+def test_incremental_detection_matches_full_detection(db_conn, tmp_path):
+    """Günlük yüklemelerden sonra artımlı tespit, bütün geçmişin tek seferde değerlendirilmesiyle aynı alarmları üretir.
+
+    Bir gün sıradan geç gelir (geriye dönük yükleme); kimlik tabanlı filigran onu da yakalamalı.
+    """
+    lines, _ = generate(date(2026, 3, 1), days=6, seed=21, hard_cases=True, privilege=True)
+    days: dict = {}
+    for line in lines:
+        days.setdefault(line[:6], []).append(line)
+    order = list(days)
+    order[2], order[3] = order[3], order[2]
+
+    modes = []
+    for i, day in enumerate(order):
+        path = tmp_path / f"day_{i}.log"
+        path.write_text("\n".join(days[day]) + "\n", encoding="utf-8", newline="\n")
+        run_pipeline(path, 2026, db_conn, tmp_path / "processed", NOW)
+        summary = run_detection(db_conn, load_config())
+        modes.append(summary["mode"])
+        if i:
+            # Artımlı çalıştırma bütün geçmişi değil, yeni günü ve öncesindeki pencereyi okur.
+            assert summary["events"] < sum(len(days[d]) for d in order[:i + 1])
+
+    incremental = _alert_rows(db_conn)
+    run_detection(db_conn, load_config(), reset=True)
+    full = _alert_rows(db_conn)
+
+    assert modes == ["full"] + ["incremental"] * (len(order) - 1)
+    assert len(full) > 30
+    assert incremental == full
