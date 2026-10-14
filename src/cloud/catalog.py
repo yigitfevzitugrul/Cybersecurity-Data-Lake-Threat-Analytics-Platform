@@ -32,6 +32,8 @@ ALERTS_COLUMNS = [
     ("attempt_count", "int", pa.int32()),
     ("distinct_users", "int", pa.int32()),
     ("details", "string", pa.string()),  # JSON metni
+    ("mitre_tactic", "string", pa.string()),
+    ("mitre_techniques", "array<string>", pa.list_(pa.string())),
 ]
 
 DAILY_IP_SUMMARY_COLUMNS = [

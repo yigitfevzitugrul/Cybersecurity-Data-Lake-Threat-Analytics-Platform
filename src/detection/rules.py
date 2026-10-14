@@ -297,16 +297,25 @@ def detect_privilege_abuse(events: list[PrivEvent], cfg: dict) -> list[Alert]:
 
 
 def detect_sensitive_command(events: list[PrivEvent], cfg: dict) -> list[Alert]:
-    """sudo ile çalıştırılan hassas komutlar (parola dosyası, sudoers, kullanıcı yönetimi, setuid)."""
-    patterns = [re.compile(p) for p in cfg["patterns"]]
+    """sudo ile çalıştırılan hassas komutlar (parola dosyası, sudoers, kullanıcı yönetimi, setuid).
+
+    Kalıplar ATT&CK tekniğine göre gruplanmıştır; eşleşen teknikler alarmın ayrıntılarına yazılır.
+    """
+    patterns = [(technique, re.compile(p)) for technique, group in cfg["patterns"].items() for p in group]
     gap = timedelta(minutes=cfg["session_gap_minutes"])
     groups = defaultdict(list)
+    matched = {}
     for event in events:
-        if event.event_type == SUDO_COMMAND and event.command and any(p.search(event.command) for p in patterns):
+        if event.event_type != SUDO_COMMAND or not event.command:
+            continue
+        techniques = [t for t, p in patterns if p.search(event.command)]
+        if techniques:
             groups[event.username].append(event)
+            matched[event] = techniques
     alerts = []
     for username, hits in groups.items():
         for session in _sessions(hits, gap):
+            techniques = list(dict.fromkeys(t for e in session for t in matched[e]))
             alerts.append(Alert(
                 rule=SENSITIVE_COMMAND,
                 severity="high",
@@ -318,6 +327,7 @@ def detect_sensitive_command(events: list[PrivEvent], cfg: dict) -> list[Alert]:
                 distinct_users=1,
                 details={
                     "commands": [e.command for e in session][:10],
+                    "techniques": techniques,
                     "target_users": sorted({e.target_user for e in session}),
                     "hosts": sorted({e.host for e in session}),
                 },

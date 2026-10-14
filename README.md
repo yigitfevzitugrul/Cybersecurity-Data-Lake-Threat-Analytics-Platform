@@ -38,7 +38,7 @@ flowchart LR
 
 | Katman | Teknoloji |
 |---|---|
-| Dil ve test | Python 3.12, pytest (105 test), GitHub Actions |
+| Dil ve test | Python 3.12, pytest (185 test), GitHub Actions |
 | Depolama | PostgreSQL 16; S3 üzerinde Parquet |
 | Orkestrasyon | Apache Airflow 2.10 |
 | Görselleştirme | Grafana 11 (kod olarak tanımlı veri kaynağı ve dashboard'lar) |
@@ -201,6 +201,24 @@ Zararsız benzerler (yeni çalışanın tek sudo denemesi, yöneticinin root kab
 
 ![Yetki yükseltme panelleri](docs/screenshots/grafana_privilege_panels.png)
 
+### MITRE ATT&CK eşlemesi
+
+Her alarm bir [MITRE ATT&CK](https://attack.mitre.org) taktiği ve bir ya da birkaç teknikle etiketlenir (`alerts.mitre_tactic`, `alerts.mitre_techniques`). Eşleme [src/detection/mitre.py](src/detection/mitre.py) içindedir; teknik adları ve bağlantıları `attack_techniques` tablosuna yazılır.
+
+| Kural | Teknik | Taktik |
+|---|---|---|
+| `brute_force` | T1110.001 Password Guessing | Credential Access |
+| `password_spray` | T1110.003 Password Spraying | Credential Access |
+| `suspicious_ip` | T1110 Brute Force | Credential Access |
+| `auth_anomaly` | T1078.003 Valid Accounts: Local Accounts (+ T1110.001, giriş başarısızlıklardan sonra geldiyse) | Initial Access |
+| `privilege_abuse` | T1548.003 Sudo and Sudo Caching (sudo hataları), T1110.001 (su ile parola denemesi) | Privilege Escalation / Credential Access |
+| `sensitive_command` | Komuta göre: T1003.008 `/etc/shadow`, T1548.003 sudoers, T1136.001 hesap ekleme, T1098 hesap değiştirme, T1548.001 setuid | Eşleşen ilk tekniğin taktiği |
+| `escalation_chain` | T1078.003 + T1548.003 / T1110.001 | Privilege Escalation |
+
+ATT&CK bazı teknikleri birden çok taktiğe bağlar (ör. Valid Accounts dört taktikte geçer). Burada her teknik, bu projedeki bağlamına uyan tek taktikle kayıtlıdır: dışarıdan SSH ile geçerli bir hesapla giriş Initial Access sayılır. `sensitive_command` kalıpları ayar dosyasında teknik kimliğine göre gruplanmıştır; yeni bir kalıp eklerken tekniği de seçilir.
+
+Güvenlik dashboard'unda alarmların taktiklere dağılımı ve teknik tablosu bulunur; teknik kimliğine tıklayınca ATT&CK sayfası açılır.
+
 ## Coğrafi konum
 
 Kaynak IP'ler ücretsiz [DB-IP Lite](https://db-ip.com) veritabanıyla ülke, şehir ve koordinata eşlenir. Veritabanı bir kez indirilir ve IP'ler bilgisayarda çözülür; hiçbir adres dışarıdaki bir servise gönderilmez, API anahtarı ya da ücret gerekmez.
@@ -318,7 +336,7 @@ sql/schema/                    tablo tanımları (sırayla uygulanır)
 sql/analysis/, sql/athena/     PostgreSQL ve Athena analiz sorguları
 src/generator/                 sentetik log üreteci
 src/etl/                       extract, parser, transform, validate, load, pipeline
-src/detection/                 kurallar, tespit motoru, doğruluk ölçümü
+src/detection/                 kurallar, tespit motoru, MITRE ATT&CK eşlemesi, doğruluk ölçümü
 src/cloud/                     AWS kurulumu, S3 senkronu, Athena, tutarlılık kontrolü
 tests/                         pytest testleri
 data/{raw,processed,curated}/  yerel veri katmanları (git'e girmez)

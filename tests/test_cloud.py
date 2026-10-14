@@ -57,7 +57,7 @@ def test_auth_events_parquet_roundtrip():
 
 def test_curated_parquet_schemas():
     alerts = [("h" * 64, "brute_force", "high", "192.0.2.10", None, datetime(2026, 9, 1), datetime(2026, 9, 1, 0, 5),
-               40, 1, json.dumps({"hosts": ["srv"]}))]
+               40, 1, json.dumps({"hosts": ["srv"]}), "Credential Access", ["T1110.001"])]
     summary = [(date(2026, 9, 1), "192.0.2.10", 40, 0, 1, 0)]
 
     alerts_table = pq.read_table(io.BytesIO(rows_to_parquet(alerts, ALERTS_COLUMNS)))
@@ -65,6 +65,7 @@ def test_curated_parquet_schemas():
 
     assert alerts_table.column("username").to_pylist() == [None]
     assert json.loads(alerts_table.column("details")[0].as_py()) == {"hosts": ["srv"]}
+    assert alerts_table.column("mitre_techniques").to_pylist() == [["T1110.001"]]
     assert summary_table.column("event_date").to_pylist() == [date(2026, 9, 1)]
 
 

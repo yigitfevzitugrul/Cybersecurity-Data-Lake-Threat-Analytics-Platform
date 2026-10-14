@@ -47,15 +47,22 @@ privilege_abuse:
   high_severity_failures: 6
 
 sensitive_command:
-  # sudo ile çalıştırıldığında alarm üreten komut kalıpları (Python düzenli ifadesi).
+  # sudo ile çalıştırıldığında alarm üreten komut kalıpları (Python düzenli ifadesi),
+  # karşılık geldikleri MITRE ATT&CK tekniğine göre gruplanmış (bkz. src/detection/mitre.py).
   # Root kabuğu açmak (sudo -i, sudo /bin/bash) yöneticiler için olağan olduğundan listede yok.
   session_gap_minutes: 30
   patterns:
-    - '/etc/shadow'
-    - '/etc/sudoers'
-    - '\bvisudo\b'
-    - '\b(useradd|usermod|adduser|passwd|chpasswd)\b'
-    - '\bchmod\s+([ugoa]*\+s|[0-7]?[4-7][0-7]{3})\b'
+    T1003.008:  # parola özetlerini okuma
+      - '/etc/shadow'
+    T1548.003:  # sudo yetkilerini değiştirme
+      - '/etc/sudoers'
+      - '\bvisudo\b'
+    T1136.001:  # yerel hesap oluşturma
+      - '\b(useradd|adduser)\b'
+    T1098:      # hesap / parola değiştirme
+      - '\b(usermod|passwd|chpasswd)\b'
+    T1548.001:  # setuid / setgid biti
+      - '\bchmod\s+([ugoa]*\+s|[0-7]?[4-7][0-7]{3})\b'
 
 escalation_chain:
   # Şüpheli bir girişten (auth_anomaly high/critical: bilinmeyen IP'den çok başarısızlık

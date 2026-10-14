@@ -33,7 +33,7 @@ AUTH_EVENTS_SQL = """
 
 ALERTS_SQL = """
     SELECT alert_hash, rule, severity, host(source_ip), username, window_start, window_end,
-           attempt_count, distinct_users, details::text
+           attempt_count, distinct_users, details::text, mitre_tactic, mitre_techniques
     FROM alerts
     ORDER BY window_start, alert_hash
 """

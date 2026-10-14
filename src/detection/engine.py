@@ -13,6 +13,7 @@ from typing import Union
 import yaml
 from psycopg2.extras import Json, execute_values
 
+from src.detection.mitre import classify, reference_rows
 from src.detection.rules import Alert, Event, PrivEvent, run_rules
 from src.utils.db import apply_schema, get_connection
 
@@ -23,7 +24,7 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "detection_rules.
 UPSERT_SQL = """
     INSERT INTO alerts (
         alert_hash, rule, severity, source_ip, username, window_start, window_end,
-        attempt_count, distinct_users, details
+        attempt_count, distinct_users, details, mitre_tactic, mitre_techniques
     ) VALUES %s
     ON CONFLICT (alert_hash) DO UPDATE SET
         severity = EXCLUDED.severity,
@@ -31,8 +32,17 @@ UPSERT_SQL = """
         attempt_count = EXCLUDED.attempt_count,
         distinct_users = EXCLUDED.distinct_users,
         details = EXCLUDED.details,
+        mitre_tactic = EXCLUDED.mitre_tactic,
+        mitre_techniques = EXCLUDED.mitre_techniques,
         last_detected_at = now()
     RETURNING (xmax = 0)
+"""
+
+
+TECHNIQUES_UPSERT_SQL = """
+    INSERT INTO attack_techniques (technique_id, name, tactic_id, tactic, url) VALUES %s
+    ON CONFLICT (technique_id) DO UPDATE SET
+        name = EXCLUDED.name, tactic_id = EXCLUDED.tactic_id, tactic = EXCLUDED.tactic, url = EXCLUDED.url
 """
 
 
@@ -66,6 +76,8 @@ def fetch_privilege_events(conn) -> list[PrivEvent]:
 
 def save_alerts(conn, alerts: list[Alert]) -> tuple[int, int]:
     """Alarmları yazar; (yeni, güncellenen) sayılarını döndürür."""
+    with conn.cursor() as cur:
+        execute_values(cur, TECHNIQUES_UPSERT_SQL, reference_rows())
     if not alerts:
         conn.commit()
         return 0, 0
@@ -74,7 +86,7 @@ def save_alerts(conn, alerts: list[Alert]) -> tuple[int, int]:
     rows = [
         (
             digest, a.rule, a.severity, a.source_ip, a.username, a.window_start, a.window_end,
-            a.attempt_count, a.distinct_users, Json(a.details),
+            a.attempt_count, a.distinct_users, Json(a.details), *classify(a),
         )
         for digest, a in unique.items()
     ]
@@ -107,6 +119,7 @@ def run_detection(conn, config: dict, reset: bool = False) -> dict:
         "updated_alerts": updated,
         "by_rule": dict(Counter(a.rule for a in alerts)),
         "by_severity": dict(Counter(a.severity for a in alerts)),
+        "by_tactic": dict(Counter(classify(a)[0] or "-" for a in alerts)),
     }
     log.info("tespit bitti: %s", summary)
     return summary
@@ -130,6 +143,7 @@ def main() -> None:
     for rule, count in sorted(summary["by_rule"].items()):
         print(f"  {rule:<18}: {count}")
     print("Önem derecesi       : " + ", ".join(f"{k}={v}" for k, v in sorted(summary["by_severity"].items())))
+    print("ATT&CK taktiği      : " + ", ".join(f"{k}={v}" for k, v in sorted(summary["by_tactic"].items())))
 
 
 if __name__ == "__main__":

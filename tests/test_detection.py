@@ -159,3 +159,19 @@ def test_end_to_end_privilege_escalation_is_detected(db_conn, tmp_path):
     with db_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM alerts WHERE rule = 'escalation_chain' AND severity = 'critical'")
         assert cur.fetchone()[0] >= 5
+
+
+def test_alerts_are_tagged_with_attack_techniques(db_conn, tmp_path):
+    _load_synthetic(db_conn, tmp_path, days=5, seed=42, privilege=True)
+    run_detection(db_conn, load_config())
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM alerts WHERE mitre_tactic IS NULL OR cardinality(mitre_techniques) = 0")
+        assert cur.fetchone()[0] == 0
+        # Her teknik başvuru tablosunda adıyla bulunur (Grafana bu birleştirmeyle okur).
+        cur.execute(
+            "SELECT DISTINCT t FROM alerts, unnest(mitre_techniques) t "
+            "WHERE t NOT IN (SELECT technique_id FROM attack_techniques)"
+        )
+        assert cur.fetchall() == []
+        cur.execute("SELECT mitre_techniques FROM alerts WHERE rule = 'sensitive_command'")
+        assert {t for (techniques,) in cur.fetchall() for t in techniques} >= {"T1003.008", "T1136.001"}

@@ -634,7 +634,7 @@
           "format": "table",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT window_start AS \"Başlangıç\", rule AS \"Kural\", severity AS \"Önem\",\n       host(source_ip) AS \"Kaynak IP\", COALESCE(username, '(birden çok)') AS \"Kullanıcı\",\n       attempt_count AS \"Başarısız deneme\", distinct_users AS \"Farklı kullanıcı\",\n       ROUND(EXTRACT(EPOCH FROM window_end - window_start) / 60) AS \"Süre (dk)\",\n       COALESCE((SELECT string_agg(r, ', ') FROM jsonb_array_elements_text(details->'reasons') r), '') AS \"Sebep\"\nFROM alerts\nWHERE $__timeFilter(window_start)\nORDER BY window_start DESC\nLIMIT 100"
+          "rawSql": "SELECT window_start AS \"Başlangıç\", rule AS \"Kural\", severity AS \"Önem\",\n       host(source_ip) AS \"Kaynak IP\", COALESCE(username, '(birden çok)') AS \"Kullanıcı\",\n       attempt_count AS \"Başarısız deneme\", distinct_users AS \"Farklı kullanıcı\",\n       ROUND(EXTRACT(EPOCH FROM window_end - window_start) / 60) AS \"Süre (dk)\",\n       COALESCE((SELECT string_agg(r, ', ') FROM jsonb_array_elements_text(details->'reasons') r), '') AS \"Sebep\",\n       array_to_string(mitre_techniques, ', ') AS \"ATT&CK\"\nFROM alerts\nWHERE $__timeFilter(window_start)\nORDER BY window_start DESC\nLIMIT 100"
         }
       ],
       "options": {
@@ -984,6 +984,160 @@
       }
     },
     {
+      "id": 17,
+      "type": "barchart",
+      "title": "ATT&CK taktiklerine göre alarmlar",
+      "description": "Her alarm, kuralına göre bir MITRE ATT&CK taktiğiyle etiketlenir (src/detection/mitre.py). Sıralama ATT&CK matrisindeki sıradır.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "secdl-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 8,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "secdl-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT a.mitre_tactic AS taktik, COUNT(*) AS alarm\nFROM alerts a\nLEFT JOIN (SELECT DISTINCT tactic, tactic_id FROM attack_techniques) t ON t.tactic = a.mitre_tactic\nWHERE $__timeFilter(a.window_start) AND a.mitre_tactic IS NOT NULL\nGROUP BY a.mitre_tactic, t.tactic_id\nORDER BY t.tactic_id"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xField": "taktik",
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 18,
+      "type": "table",
+      "title": "ATT&CK teknikleri",
+      "description": "Alarmlarda görülen teknikler. Teknik kimliğine tıklayınca attack.mitre.org sayfası açılır. Taktik, tekniğin bu projedeki bağlamına göredir.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "secdl-postgres"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 42,
+        "w": 16,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "secdl-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT t.tactic AS \"Taktik\", t.technique_id AS \"Teknik\", t.name AS \"Ad\",\n       COUNT(*) AS \"Alarm\", string_agg(DISTINCT a.rule, ', ') AS \"Kurallar\",\n       MAX(a.window_start) AS \"Son görülme\", t.url\nFROM alerts a\nCROSS JOIN LATERAL unnest(a.mitre_techniques) AS tid\nJOIN attack_techniques t ON t.technique_id = tid\nWHERE $__timeFilter(a.window_start)\nGROUP BY t.tactic_id, t.tactic, t.technique_id, t.name, t.url\nORDER BY t.tactic_id, \"Alarm\" DESC"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Teknik"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "MITRE ATT&CK",
+                    "url": "${__data.fields.url}",
+                    "targetBlank": true
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Taktik"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Alarm"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Son görülme"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "id": 14,
       "type": "geomap",
       "title": "Saldırı kaynakları haritası (tüm zamanlar)",
@@ -994,7 +1148,7 @@
       "description": "Başarısız SSH denemelerinin kaynak IP'leri; nokta büyüklüğü deneme sayısıdır. Sentetik verideki adresler belgeleme bloklarından seçildiği için haritada yalnızca gerçek (Loghub) saldırganlar görünür. Konum bugünkü veritabanına göredir. Konum verisi: IP Geolocation by DB-IP (https://db-ip.com), CC BY 4.0.",
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 51,
         "w": 16,
         "h": 12
       },
@@ -1094,7 +1248,7 @@
       "description": "Yalnızca konumu bilinen (internete açık) adresler; özel ve belgeleme adresleri dahil değildir. Konum verisi: IP Geolocation by DB-IP (https://db-ip.com), CC BY 4.0.",
       "gridPos": {
         "x": 16,
-        "y": 42,
+        "y": 51,
         "w": 8,
         "h": 12
       },
@@ -1136,7 +1290,7 @@
       "transparent": true,
       "gridPos": {
         "x": 0,
-        "y": 54,
+        "y": 63,
         "w": 24,
         "h": 2
       },

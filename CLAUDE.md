@@ -142,5 +142,12 @@ dags/  grafana/  tests/  docs/
   - DAG: `run_etl` → `enrich_geoip` (dosya yoksa skipped). Konteynerde doğrulandı (run `verify_geoip_1`).
   - Grafana güvenlik dashboard'u: Geomap (tüm zamanlar) + ülkelere göre bar + atıf metni. CARTO altlığı artık API anahtarı istiyor → altlık Grafana içindeki `public/maps/countries.geojson` (çevrimdışı).
   - Sonuç: Loghub'daki 25 gerçek IP'nin hepsi konumlandı (Çin 346, Meksika 80, Vietnam 53 başarısız deneme); sentetik IP'ler bilerek konumsuz.
+- 2026-10-14: **MITRE ATT&CK eşlemesi eklendi** ve doğrulandı:
+  - `src/detection/mitre.py`: teknik tablosu (9 teknik, her biri bu projedeki bağlamına uyan tek taktikle) + `classify(alert)` → (taktik, teknikler). auth_anomaly → T1078.003 (+T1110.001 success_after_failures ise); privilege_abuse → T1548.003 (sudo) / T1110.001 (su); escalation_chain taktiği her zaman Privilege Escalation.
+  - `sensitive_command.patterns` config'te artık teknik kimliğine göre gruplu (dict); eşleşen teknikler `details.techniques`'e yazılır.
+  - `sql/schema/009_mitre_attack.sql`: `alerts.mitre_tactic`, `alerts.mitre_techniques TEXT[]`, başvuru tablosu `attack_techniques` (motor her çalıştırmada upsert eder). Eski alarmlar bir sonraki tespit çalıştırmasında etiketlenir, `--reset` gerekmez.
+  - Bulut: curated `alerts` Parquet/Glue şemasına `mitre_tactic`, `mitre_techniques array<string>` eklendi — Ocak'ta `setup` Glue tablosunu güncelleyecek (canlı denenmedi).
+  - Grafana güvenlik dashboard'u: "ATT&CK taktiklerine göre alarmlar" + "ATT&CK teknikleri" (attack.mitre.org bağlantılı); "Son alarmlar"a ATT&CK sütunu. Tarayıcıda kontrol edildi. Ekran görüntüsü alınamadı (pane çizmedi), README'de yok.
+  - Geliştirme DB: 168 alarmın hepsi etiketli (Credential Access 108, Initial Access 39, Privilege Escalation 21). Testler: 185.
 - 2026-10-14 karar: rapor (Claude Doc) ve sunum (Slides artifact) **en sonda, bütün özellikler bittikten sonra baştan yazılacak**; ara özellik eklemelerinde güncelleme. Yeni özellik eklenebilir.
 - Sıradaki: H7–8 — rapor, sunum, demo videosu. PySpark opsiyonel, önerilmiyor.
