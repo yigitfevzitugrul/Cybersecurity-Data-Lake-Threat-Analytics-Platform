@@ -66,3 +66,31 @@ def test_legit_users_only_succeed_from_home_or_labeled_ip():
     for e in _events(lines):
         if e.event_type == LOGIN_SUCCESS:
             assert e.source_ip in allowed
+
+
+def test_privilege_activity_is_parseable_and_matches_labels():
+    from src.etl.parser import PrivilegeEvent
+
+    base_lines, base_labels = generate(START, days=3, seed=1)
+    lines, labels = generate(START, days=3, seed=1, privilege=True)
+    # Temel çıktı değişmez; yetki satırları yalnızca eklenir.
+    assert set(base_lines) <= set(lines)
+    def without_ids(attacks):
+        return [{k: v for k, v in a.items() if k != "attack_id"} for a in attacks]
+
+    assert without_ids(a for a in labels["attacks"] if "username" not in a) == without_ids(base_labels["attacks"])
+
+    privilege = [e for e in (parse_line(l, START.year) for l in lines) if isinstance(e, PrivilegeEvent)]
+    failure_types = {"sudo_auth_failure", "sudo_not_allowed", "su_failure"}
+    for attack in (a for a in labels["attacks"] if "username" in a):
+        assert attack["attack_type"] in ("privilege_escalation", "su_bruteforce")
+        window = [e for e in privilege if e.username == attack["username"]
+                  and attack["start_time"] <= e.event_time.isoformat() <= attack["end_time"]]
+        assert sum(e.attempts for e in window if e.event_type in failure_types) == attack["failed_attempts"]
+        assert window[0].event_time.isoformat() == attack["start_time"]
+        assert window[-1].event_time.isoformat() == attack["end_time"]
+
+    escalations = [a for a in labels["attacks"] if a["attack_type"] == "privilege_escalation"]
+    breaches = [a for a in base_labels["attacks"] if a["attack_type"] == "success_after_failures"]
+    assert [(a["source_ip"], a["username"]) for a in escalations] == [
+        (b["source_ip"], b["target_users"][0]) for b in breaches]

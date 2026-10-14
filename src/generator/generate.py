@@ -1,4 +1,4 @@
-"""Gömülü saldırılar içeren sentetik OpenSSH auth logu üretir.
+"""Gömülü saldırılar içeren sentetik Linux auth logu (sshd, sudo, su) üretir.
 
 Çıktılar:
   - log dosyası     : gerçek sshd satır formatında, zamana göre sıralı
@@ -33,6 +33,22 @@ PASSWORD_SPRAY = "password_spray"
 SUCCESS_AFTER_FAILURES = "success_after_failures"
 OFF_HOURS_NEW_IP = "off_hours_new_ip_login"
 SLOW_BRUTE_FORCE = "slow_brute_force"
+PRIVILEGE_ESCALATION = "privilege_escalation"
+SU_BRUTEFORCE = "su_bruteforce"
+
+# sudo yetkisi olan kullanıcılar; diğerleri sudoers dosyasında değildir.
+ADMINS = ["alice", "bob", "carol"]
+ROUTINE_SUDO_COMMANDS = [
+    "/usr/bin/apt update",
+    "/usr/bin/systemctl restart nginx",
+    "/usr/bin/systemctl status postgresql",
+    "/usr/bin/journalctl -u ssh --since today",
+    "/usr/bin/tail -n 100 /var/log/syslog",
+    "/usr/bin/docker ps",
+]
+# Ele geçirilmiş bir yönetici hesabıyla yapılan tipik adımlar: yetkileri listele,
+# parola özetlerini oku, root yetkili gizli bir kullanıcı ekle.
+ATTACKER_SUDO_COMMANDS = ["list", "/bin/cat /etc/shadow", "/usr/sbin/useradd -o -u 0 -g 0 -M sysupdate"]
 
 
 class LogBuilder:
@@ -43,9 +59,12 @@ class LogBuilder:
         self.entries: list[tuple[datetime, int, str]] = []
         self._pid = rng.randint(2000, 9000)
 
-    def _add(self, ts: datetime, pid: int, message: str) -> None:
-        line = f"{ts:%b} {ts.day:>2} {ts:%H:%M:%S} {HOST} sshd[{pid}]: {message}"
+    def _add_line(self, ts: datetime, process: str, message: str) -> None:
+        line = f"{ts:%b} {ts.day:>2} {ts:%H:%M:%S} {HOST} {process}: {message}"
         self.entries.append((ts, len(self.entries), line))
+
+    def _add(self, ts: datetime, pid: int, message: str) -> None:
+        self._add_line(ts, f"sshd[{pid}]", message)
 
     def _new_connection(self) -> tuple[int, int]:
         self._pid += self.rng.randint(1, 7)
@@ -64,6 +83,22 @@ class LogBuilder:
         pid, port = self._new_connection()
         self._add(ts, pid, f"Accepted password for {user} from {ip} port {port} ssh2")
         self._add(ts, pid, f"pam_unix(sshd:session): session opened for user {user} by (uid=0)")
+
+    def sudo(self, ts: datetime, user: str, command: str, tty: str, status: str = "") -> None:
+        """status boşsa izin verilmiş komut; aksi halde sudo'nun hata mesajı."""
+        prefix = f"{status} ; " if status else ""
+        self._add_line(
+            ts, "sudo", f"   {user} : {prefix}TTY={tty} ; PWD=/home/{user} ; USER=root ; COMMAND={command}"
+        )
+
+    def su(self, ts: datetime, user: str, tty: str, ok: bool) -> None:
+        self._pid += self.rng.randint(1, 7)
+        if ok:
+            self._add_line(ts, f"su[{self._pid}]", f"(to root) {user} on {tty}")
+            # Aynı girişimin pam kaydı; ayrıştırıcı bunu tekrar saymaz.
+            self._add_line(ts, f"su[{self._pid}]", f"pam_unix(su:session): session opened for user root by {user}(uid=1000)")
+        else:
+            self._add_line(ts, f"su[{self._pid}]", f"FAILED SU (to root) {user} on {tty}")
 
 
 
@@ -224,6 +259,88 @@ def _hard_cases(rng: random.Random, start_date: date, days: int, home_ips: dict)
     return log.entries, attacks, benign
 
 
+def _privilege_label(attack_type, user, ip, times, failed, succeeded) -> dict:
+    label = _label(attack_type, ip, [user], times, failed, succeeded)
+    label["username"] = user  # sudo / su kayıtlarında IP yoktur; olay kullanıcıyla eşleştirilir.
+    return label
+
+
+def _privilege_activity(rng: random.Random, start_date: date, days: int, base_attacks: list, hard_cases: bool):
+    """sudo / su kayıtları üretir; (satır kayıtları, saldırılar, zararsız benzerler) döndürür.
+
+    Her gün:
+      - yöneticilerin mesai içindeki olağan sudo komutları (ara sıra bir yanlış parola),
+      - privilege_escalation: o günün "başarısızlıklar sonrası başarılı giriş" saldırısında
+        ele geçirilen hesapla, girişten birkaç dakika sonra yetki yükseltme denemesi,
+      - su_bruteforce: yetkisi olmayan bir kullanıcının art arda root parolası denemesi.
+    hard_cases açıksa iki zararsız benzer de eklenir: sudo yetkisi olmayan yeni bir
+    çalışanın tek bir sudo denemesi ve bir yöneticinin akşam saatinde açtığı root kabuğu.
+    """
+    log = LogBuilder(rng)
+    tty = lambda: f"pts/{rng.randint(0, 9)}"
+    attacks, benign = [], []
+    breaches = {a["start_time"][:10]: a for a in base_attacks if a["attack_type"] == SUCCESS_AFTER_FAILURES}
+    for d in range(days):
+        day = start_date + timedelta(days=d)
+        day_start = datetime.combine(day, time.min)
+
+        for admin in ADMINS:
+            for _ in range(rng.randint(1, 3)):
+                ts = day_start + timedelta(seconds=rng.randint(9 * 3600, 17 * 3600))
+                terminal = tty()
+                if rng.random() < 0.10:
+                    log.sudo(ts - timedelta(seconds=rng.randint(4, 10)), admin, "/usr/bin/apt update", terminal,
+                             "1 incorrect password attempt")
+                log.sudo(ts, admin, rng.choice(ROUTINE_SUDO_COMMANDS), terminal)
+            if rng.random() < 0.20:
+                log.su(day_start + timedelta(seconds=rng.randint(9 * 3600, 17 * 3600)), admin, tty(), ok=True)
+
+        breach = breaches.get(day.isoformat())
+        if breach:
+            user, ip = breach["target_users"][0], breach["source_ip"]
+            ts = datetime.fromisoformat(breach["end_time"]) + timedelta(seconds=rng.randint(60, 300))
+            terminal, times, failed = tty(), [], 0
+            if user in ADMINS:
+                for command in ATTACKER_SUDO_COMMANDS:
+                    log.sudo(ts, user, command, terminal)
+                    times.append(ts)
+                    ts += timedelta(seconds=rng.randint(10, 40))
+            else:
+                for command in ("list", "/bin/bash"):
+                    log.sudo(ts, user, command, terminal, "user NOT in sudoers")
+                    times.append(ts)
+                    failed += 1
+                    ts += timedelta(seconds=rng.randint(10, 40))
+                for _ in range(rng.randint(3, 5)):
+                    log.su(ts, user, terminal, ok=False)
+                    times.append(ts)
+                    failed += 1
+                    ts += timedelta(seconds=rng.randint(10, 30))
+            attacks.append(_privilege_label(PRIVILEGE_ESCALATION, user, ip, times, failed, user in ADMINS))
+
+        insider = rng.choice([u for u in LEGIT_USERS if u not in ADMINS])
+        ts = day_start + timedelta(seconds=rng.randint(0, 22 * 3600))
+        terminal, times = tty(), []
+        for _ in range(rng.randint(6, 10)):
+            log.su(ts, insider, terminal, ok=False)
+            times.append(ts)
+            ts += timedelta(seconds=rng.randint(5, 20))
+        attacks.append(_privilege_label(SU_BRUTEFORCE, insider, None, times, len(times), False))
+
+        if hard_cases:
+            newcomer = rng.choice([u for u in LEGIT_USERS if u not in ADMINS])
+            ts = day_start + timedelta(seconds=rng.randint(9 * 3600, 17 * 3600))
+            log.sudo(ts, newcomer, "/usr/bin/apt update", tty(), "user NOT in sudoers")
+            benign.append({"case": "sudo_mistake", "username": newcomer, "source_ip": None,
+                           "start_time": ts.isoformat(), "end_time": ts.isoformat(), "failed_attempts": 1})
+            admin = rng.choice(ADMINS)
+            ts = day_start + timedelta(seconds=rng.randint(20 * 3600, 22 * 3600))
+            log.sudo(ts, admin, "/bin/bash", tty())
+            benign.append({"case": "admin_root_shell", "username": admin, "source_ip": None,
+                           "start_time": ts.isoformat(), "end_time": ts.isoformat(), "failed_attempts": 0})
+    return log.entries, attacks, benign
+
+
 def generate(
     start_date: date,
     days: int = 1,
@@ -231,13 +348,15 @@ def generate(
     noise_ips_per_day: int = 30,
     bad_ratio: float = 0.0,
     hard_cases: bool = False,
+    privilege: bool = False,
 ):
     """(log satırları, etiket sözlüğü) döndürür. Her güne 4 saldırı tipinden birer tane gömülür.
 
     bad_ratio > 0 ise temiz satır sayısının o oranı kadar bozuk satır eklenir.
     hard_cases açıksa her güne yavaş bir brute force ve zararsız bir "şifresini
-    unutan kullanıcı" durumu eklenir. İkisi de ayrı RNG kullanır; temel satırlar
-    ve temel saldırı etiketleri bu seçeneklerden etkilenmez.
+    unutan kullanıcı" durumu eklenir. privilege açıksa sudo / su kayıtları ve iki
+    yetki yükseltme saldırısı eklenir (_privilege_activity). Hepsi ayrı RNG kullanır;
+    temel satırlar ve temel saldırı etiketleri bu seçeneklerden etkilenmez.
     """
     rng = random.Random(seed)
     log = LogBuilder(rng)
@@ -270,6 +389,14 @@ def generate(
         offset = len(entries)
         entries = entries + [(ts, offset + seq, line) for ts, seq, line in extra_entries]
         attacks.extend(extra_attacks)
+    if privilege:
+        extra_entries, extra_attacks, extra_benign = _privilege_activity(
+            random.Random(seed + 3), start_date, days, list(attacks), hard_cases
+        )
+        offset = len(entries)
+        entries = entries + [(ts, offset + seq, line) for ts, seq, line in extra_entries]
+        attacks.extend(extra_attacks)
+        benign = benign + extra_benign
     clean_lines = [line for _, _, line in sorted(entries)]
 
     attacks.sort(key=lambda a: a["start_time"])
@@ -307,10 +434,13 @@ def main() -> None:
     ap.add_argument("--bad-ratio", type=float, default=0.0, help="Eklenecek bozuk satır oranı (örn. 0.02)")
     ap.add_argument("--hard-cases", action="store_true",
                     help="Yavaş brute force ve şifresini unutan kullanıcı durumlarını ekle")
+    ap.add_argument("--privilege", action="store_true",
+                    help="sudo / su kayıtları ve yetki yükseltme saldırıları ekle")
     args = ap.parse_args()
 
     lines, labels = generate(
-        args.start_date, args.days, args.seed, bad_ratio=args.bad_ratio, hard_cases=args.hard_cases
+        args.start_date, args.days, args.seed, bad_ratio=args.bad_ratio, hard_cases=args.hard_cases,
+        privilege=args.privilege,
     )
     out = Path(args.out)
     labels_path = write_files(out, lines, labels)
@@ -318,11 +448,11 @@ def main() -> None:
     print(f"Log     : {out} ({len(lines)} satır)")
     print(f"Etiket  : {labels_path} ({len(labels['attacks'])} saldırı)")
     for a in labels["attacks"]:
-        print(f"  #{a['attack_id']} {a['attack_type']:<24} {a['source_ip']:<16} "
+        print(f"  #{a['attack_id']} {a['attack_type']:<24} {a['source_ip'] or '-':<16} "
               f"{a['failed_attempts']:>3} başarısız, başarı={a['succeeded']}  {a['start_time']}")
     for b in labels["benign_lookalikes"]:
-        print(f"  (zararsız) {b['case']:<21} {b['source_ip']:<16} {b['failed_attempts']:>3} başarısız, "
-              f"sonra başarılı giriş  {b['start_time']}")
+        print(f"  (zararsız) {b['case']:<21} {b.get('username') or b['source_ip']:<16} "
+              f"{b['failed_attempts']:>3} başarısız  {b['start_time']}")
     if labels["injected_bad_lines"]:
         print(f"Bozuk   : {sum(labels['injected_bad_lines'].values())} satır {labels['injected_bad_lines']}")
 
