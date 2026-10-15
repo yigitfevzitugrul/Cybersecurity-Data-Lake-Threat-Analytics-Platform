@@ -1,0 +1,83 @@
+# Kritik alarm bildirimi: tespit motoru yeni bir "critical" alarm yazdığında Telegram'a mesaj.
+# docker-compose.alerting.yml ile yüklenir. "Telegram" bildirim kanalı ayrı, yerel bir dosyadadır
+# (telegram_contact_point.local.yaml); onu python -m src.utils.telegram_setup üretir.
+apiVersion: 1
+
+templates:
+  - orgId: 1
+    name: secdl
+    template: |
+      {{ define "secdl.message" -}}
+      {{ len .Alerts.Firing }} yeni kritik alarm
+      {{ range .Alerts.Firing }}
+      Kural: {{ .Labels.rule }}
+      Kaynak IP: {{ .Labels.source_ip }}
+      Hesap: {{ .Labels.username }}
+      ATT&amp;CK: {{ .Labels.techniques }}
+      Saldırı zamanı: {{ .Labels.window_start }}
+      {{ end }}
+      {{- end }}
+
+policies:
+  - orgId: 1
+    receiver: Telegram
+    # Aynı anda gelen alarmlar tek mesajda toplanır (ör. --reset sonrası).
+    group_by: ["alertname"]
+    group_wait: 10s
+    group_interval: 1m
+    repeat_interval: 24h
+
+groups:
+  - orgId: 1
+    name: Kritik alarmlar
+    folder: Security Data Lake
+    interval: 1m
+    rules:
+      - uid: secdl-critical-alert
+        title: Kritik güvenlik alarmı
+        condition: C
+        for: 0s
+        # Alarm yoksa sorgu boş döner: bu "her şey yolunda" demektir.
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: Tespit motoru son 5 dakikada yeni bir kritik alarm yazdı.
+        data:
+          # Her satır ayrı bir bildirim örneğidir; metin sütunları etiket olur.
+          # Saldırının zamanına değil, alarmın yazıldığı zamana bakılır: geriye dönük
+          # yüklenen günlerdeki kritik alarmlar da bildirilir.
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: secdl-postgres
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              editorMode: code
+              rawSql: |
+                SELECT rule,
+                       COALESCE(host(source_ip), '-') AS source_ip,
+                       COALESCE(username, '-') AS username,
+                       COALESCE(array_to_string(mitre_techniques, ', '), '-') AS techniques,
+                       to_char(window_start, 'YYYY-MM-DD HH24:MI') AS window_start,
+                       1 AS value
+                FROM alerts
+                WHERE severity = 'critical'
+                  AND first_detected_at > now() - interval '5 minutes'
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [0] }

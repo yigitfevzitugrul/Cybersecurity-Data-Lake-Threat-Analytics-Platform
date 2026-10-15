@@ -1,5 +1,7 @@
 # Sırlar
 .env
+# Yerel Grafana bildirim kanalı (src.utils.telegram_setup üretir)
+grafana/alerting/*.local.yaml
 
 # Veri katmanları (sadece klasör iskeleti git'e girer)
 data/raw/*

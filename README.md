@@ -38,7 +38,7 @@ flowchart LR
 
 | Katman | Teknoloji |
 |---|---|
-| Dil ve test | Python 3.12, pytest (191 test), GitHub Actions |
+| Dil ve test | Python 3.12, pytest (194 test), GitHub Actions |
 | Depolama | PostgreSQL 16; S3 üzerinde Parquet |
 | Orkestrasyon | Apache Airflow 2.10 |
 | Görselleştirme | Grafana 11 (kod olarak tanımlı veri kaynağı ve dashboard'lar) |
@@ -221,6 +221,23 @@ ATT&CK bazı teknikleri birden çok taktiğe bağlar (ör. Valid Accounts dört 
 Güvenlik dashboard'unda alarmların taktiklere dağılımı ve teknik tablosu bulunur; teknik kimliğine tıklayınca ATT&CK sayfası açılır.
 
 ![ATT&CK panelleri](docs/screenshots/grafana_attack_panels.jpg)
+
+### Telegram bildirimi
+
+İsteğe bağlı olarak, tespit motoru yeni bir **critical** alarm yazdığında Grafana Telegram'a mesaj gönderir: kural, kaynak IP, hesap, ATT&CK teknikleri ve saldırı zamanı. Grafana kuralı dakikada bir çalışır ve alarmın saldırı zamanına değil **yazıldığı** zamana (`first_detected_at`) bakar; böylece geriye dönük yüklenen günlerdeki saldırılar da bildirilir. Aynı anda gelen alarmlar tek mesajda toplanır.
+
+Kurulum (bir kez):
+
+1. Telegram'da **@BotFather** ile bir bot oluşturun (`/newbot`) ve verdiği token'ı `.env` dosyasına `TELEGRAM_BOT_TOKEN=...` olarak ekleyin.
+2. Botunuzu açıp ona bir mesaj yazın (botlar kendilerine yazmamış birine mesaj gönderemez).
+3. Sohbet kimliğini bulup Grafana bildirim kanalı dosyasını üretin ve deneme mesajı gönderin:
+
+```powershell
+python -m src.utils.telegram_setup --test
+docker compose -f docker-compose.yml -f docker-compose.alerting.yml up -d --wait
+```
+
+Kural, şablon ve bildirim politikası [grafana/alerting/critical_alerts.yaml](grafana/alerting/critical_alerts.yaml) dosyasındadır. Bildirim kanalı yerel bir dosyaya (`grafana/alerting/telegram_contact_point.local.yaml`, git'e girmez) yazılır; token o dosyada da bulunmaz, Grafana onu ortam değişkeninden okur. Varsayılan kurulumda (yalnızca `docker-compose.yml`) bildirim yoktur.
 
 ## Coğrafi konum
 
