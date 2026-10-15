@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/yigitfevzitugrul/Cybersecurity-Data-Lake-Threat-Analytics-Platform/actions/workflows/tests.yml/badge.svg)](https://github.com/yigitfevzitugrul/Cybersecurity-Data-Lake-Threat-Analytics-Platform/actions/workflows/tests.yml)
 
-Linux kimlik doğrulama loglarını (SSH girişleri ve sudo / su yetki yükseltme denemeleri) toplayan, ETL'den geçiren, veri kalitesini denetleyen, tehditleri kural tabanlı olarak tespit eden, sonuçları Grafana'da gösteren ve veriyi AWS üzerinde bir data lake'e taşıyan uçtan uca bir veri mühendisliği projesi.
+Linux kimlik doğrulama loglarını (SSH girişleri ve sudo / su yetki yükseltme denemeleri) toplayan, ETL'den geçiren, veri kalitesini denetleyen, tehditleri kural tabanlı ve artımlı olarak tespit edip MITRE ATT&CK ile etiketleyen, sonuçları Grafana'da gösteren, kritik alarmları ve haftalık raporu Telegram'a gönderen ve veriyi AWS üzerinde bir data lake'e taşıyan uçtan uca bir veri mühendisliği projesi.
 
 Bilişim Sistemleri Mühendisliği bitirme projesi olarak geliştirilmiştir.
 
@@ -17,10 +17,13 @@ flowchart LR
     subgraph Yerel["Yerel (Docker Compose)"]
         A[Airflow DAG]
         E[ETL<br/>extract → transform<br/>→ validate → load]
-        P[(PostgreSQL<br/>auth_events<br/>rejected_events<br/>pipeline_runs<br/>alerts)]
-        D[Tespit kuralları]
-        F[Grafana]
+        P[(PostgreSQL<br/>auth_events · privilege_events<br/>rejected_events · pipeline_runs<br/>alerts · detection_runs)]
+        D["Artımlı tespit<br/>+ MITRE ATT#38;CK"]
+        R[IP konumu<br/>DB-IP Lite]
+        W[Haftalık rapor<br/>HTML]
+        F[Grafana<br/>dashboard + alarm kuralı]
     end
+    T[Telegram]
     subgraph AWS["AWS (isteğe bağlı)"]
         S[(S3<br/>raw / processed / curated)]
         C[Glue Data Catalog]
@@ -31,7 +34,11 @@ flowchart LR
     A -. zamanlar .-> E
     E --> P
     P --> D --> P
+    R --> P
     P --> F
+    P --> W
+    F -- kritik alarm --> T
+    W -- pazartesi --> T
     P -- Parquet --> S
     S --- C --- Q
 ```
@@ -41,7 +48,9 @@ flowchart LR
 | Dil ve test | Python 3.12, pytest (199 test), GitHub Actions |
 | Depolama | PostgreSQL 16; S3 üzerinde Parquet |
 | Orkestrasyon | Apache Airflow 2.10 |
-| Görselleştirme | Grafana 11 (kod olarak tanımlı veri kaynağı ve dashboard'lar) |
+| Görselleştirme | Grafana 11 (kod olarak tanımlı veri kaynağı, dashboard'lar ve alarm kuralı) |
+| Bildirim | Grafana Alerting + Telegram Bot API (isteğe bağlı) |
+| Zenginleştirme | MITRE ATT&CK eşlemesi, DB-IP Lite ile çevrimdışı IP konumu |
 | Bulut | AWS S3, Glue Data Catalog, Athena, IAM, Budgets (boto3) |
 | Çalışma ortamı | Docker Compose |
 
@@ -51,6 +60,10 @@ flowchart LR
 - **Veri kalitesi:** yedi farklı red sebebi, karantina tablosu ve her çalıştırma için denetim kaydı.
 - **Ölçülebilir tespit:** sentetik üreteç saldırıları etiketlediği için kuralların precision ve recall değerleri hesaplanır; sınırları açıkça raporlanır.
 - **En az yetki:** Grafana salt-okunur bir veritabanı rolüyle, bulut pipeline'ı kalıcı anahtarı olmayan dar yetkili bir IAM rolüyle çalışır.
+- **Saldırı zinciri tespiti:** SSH girişleri ile sudo / su etkinliği birleştirilir; ele geçirilen hesapla yapılan yetki yükseltme ayrı bir kritik alarm olarak yakalanır.
+- **MITRE ATT&CK:** her alarm bir taktik ve tekniklerle etiketlenir; dashboard ve rapor ATT&CK sayfalarına bağlanır.
+- **Ölçeklenebilir tespit:** artımlı mod yalnızca yeni olayları ve öncesindeki 24 saati okur; 194 bin olayda günlük tespit 1,2 sn yerine 87 ms sürer ve tam tespitle birebir aynı alarmları üretir.
+- **Bildirim ve raporlama:** kritik alarmlar dakikalar içinde Telegram'a düşer; her pazartesi biten haftanın HTML raporu üretilip gönderilir.
 
 ## Pipeline
 
