@@ -1,12 +1,17 @@
-# İsteğe bağlı: kritik alarmlar için Telegram bildirimi.
+# İsteğe bağlı: Telegram bildirimleri.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.alerting.yml up -d --wait
 #
 # Önce: .env'ye TELEGRAM_BOT_TOKEN ekleyin, bota bir mesaj yazın ve
 #   python -m src.utils.telegram_setup --test
-# çalıştırın (bkz. README, "Telegram bildirimi"). Bu dosya Grafana'ya bildirim kuralını,
-# Telegram kanalını ve mesaj şablonunu (grafana/alerting/) yükler. Varsayılan kurulumda
-# bildirim yoktur.
+# çalıştırın (bkz. README, "Telegram bildirimi"). Bu dosya:
+#   - Grafana'ya kritik alarm kuralını, Telegram kanalını ve mesaj şablonunu (grafana/alerting/) yükler,
+#   - Airflow'a Telegram ayarlarını verir; haftalık rapor DAG'i raporu Telegram'a gönderir.
+# Varsayılan kurulumda bildirim yoktur ve haftalık rapor yalnızca dosyaya yazılır.
+
+x-telegram: &telegram
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN .env dosyasında tanımlı değil}
+  TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID tanımlı değil, önce python -m src.utils.telegram_setup}"
 
 services:
   grafana:
@@ -14,3 +19,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN .env dosyasında tanımlı değil}
     volumes:
       - ./grafana/alerting:/etc/grafana/provisioning/alerting:ro
+  airflow-scheduler:
+    environment: *telegram
+  airflow-webserver:
+    environment: *telegram

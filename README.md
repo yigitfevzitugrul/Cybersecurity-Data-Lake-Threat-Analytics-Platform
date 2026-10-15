@@ -38,7 +38,7 @@ flowchart LR
 
 | Katman | Teknoloji |
 |---|---|
-| Dil ve test | Python 3.12, pytest (194 test), GitHub Actions |
+| Dil ve test | Python 3.12, pytest (199 test), GitHub Actions |
 | Depolama | PostgreSQL 16; S3 üzerinde Parquet |
 | Orkestrasyon | Apache Airflow 2.10 |
 | Görselleştirme | Grafana 11 (kod olarak tanımlı veri kaynağı ve dashboard'lar) |
@@ -118,6 +118,25 @@ DAG ilk kurulumda duraklatılmış gelir. Arayüzden açabilir ya da komut satı
 ```powershell
 docker compose exec airflow-scheduler airflow dags unpause auth_log_etl
 docker compose exec airflow-scheduler airflow dags trigger auth_log_etl
+```
+
+### Haftalık güvenlik raporu
+
+`weekly_security_report` DAG'i her pazartesi 06:00'da (UTC) biten haftanın raporunu üretir (`build_report → send_report`). Rapor, internet bağlantısı gerektirmeyen tek dosyalık bir HTML'dir; aynı sayılar JSON olarak da yazılır (`data/curated/reports/weekly_<pazartesi>.html` / `.json`):
+
+- temel sayılar ve önceki haftaya göre değişim (başarısız deneme, saldıran IP, başarılı giriş, alarm, kritik alarm, başarısız yetki girişimi),
+- günlük başarısız deneme grafiği,
+- önem derecesi ve kurala göre alarmlar, MITRE ATT&CK teknikleri, kritik alarmların listesi,
+- en çok saldıran IP'ler (ülkesiyle) ve en çok hedeflenen kullanıcı adları,
+- yetki yükseltme girişimleri ve hassas sudo komutları,
+- o haftanın verisini yükleyen pipeline çalıştırmalarının veri kalitesi (red oranı ve sebepleri).
+
+Telegram ayarlıysa ([Telegram bildirimi](#telegram-bildirimi)) rapor, kısa bir özetle birlikte dosya olarak gönderilir; değilse `send_report` atlanır. Logdan gelen bütün değerler (ör. saldırganın denediği kullanıcı adları) HTML'e kaçışlanarak yazılır.
+
+```powershell
+python -m src.reporting.weekly                          # son tamamlanan hafta
+python -m src.reporting.weekly --week-ending 2026-10-12 # 2026-10-05 – 2026-10-11 haftası
+python -m src.reporting.weekly --telegram               # Telegram'a da gönder
 ```
 
 ## Tehdit tespiti
@@ -380,9 +399,10 @@ Veritabanı testleri geçici bir şemada çalışır ve geliştirme verisine dok
 
 ```
 config/detection_rules.yaml    tespit kurallarının eşikleri
-dags/auth_log_etl.py           Airflow DAG'i
+dags/auth_log_etl.py           günlük ETL + tespit DAG'i
+dags/weekly_security_report.py haftalık rapor DAG'i
 docker/                        Airflow imajı ve veritabanı ilk kurulum betiği
-grafana/                       veri kaynağı ve dashboard tanımları
+grafana/                       veri kaynağı, dashboard ve Telegram bildirim tanımları
 infra/iam/                     pipeline rolünün IAM politikası
 sql/schema/                    tablo tanımları (sırayla uygulanır)
 sql/analysis/, sql/athena/     PostgreSQL ve Athena analiz sorguları
@@ -390,6 +410,8 @@ src/generator/                 sentetik log üreteci
 src/etl/                       extract, parser, transform, validate, load, pipeline
 src/detection/                 kurallar, artımlı tespit motoru, MITRE ATT&CK eşlemesi, doğruluk ölçümü
 src/benchmark/                 ölçeklenebilirlik testi
+src/reporting/                 haftalık güvenlik raporu
+src/utils/                     veritabanı bağlantısı, Telegram yardımcıları ve kurulumu
 src/cloud/                     AWS kurulumu, S3 senkronu, Athena, tutarlılık kontrolü
 tests/                         pytest testleri
 data/{raw,processed,curated}/  yerel veri katmanları (git'e girmez)

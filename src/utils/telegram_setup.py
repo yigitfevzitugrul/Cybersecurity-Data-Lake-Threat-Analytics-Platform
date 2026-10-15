@@ -1,27 +1,25 @@
-"""Telegram bildirimi kurulumu: chat id'yi bulur ve Grafana bildirim kanalı dosyasını yazar.
+"""Telegram bildirimi kurulumu: chat id'yi bulur, Grafana bildirim kanalı dosyasını yazar.
 
 Grafana, provisioning dosyalarına ortam değişkeninden gelen sayısal değerleri sayıya
 çevirir; Telegram kanalı ise chat id'yi metin olarak ister. Bu yüzden chat id dosyaya
 doğrudan yazılır. Dosya yereldir (git'e girmez); bot token'ı yine .env'den, ortam
-değişkeniyle gelir ve dosyada bulunmaz.
+değişkeniyle gelir ve dosyada bulunmaz. Chat id ayrıca .env'ye TELEGRAM_CHAT_ID olarak
+yazılır; haftalık raporu gönderen Airflow görevi onu oradan okur.
 
 Önce @BotFather'dan bot oluşturup TELEGRAM_BOT_TOKEN'ı .env'ye ekleyin ve bota bir mesaj
 yazın. Sonra:
     python -m src.utils.telegram_setup [--test]
 """
 import argparse
-import json
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
-from typing import Optional
 
 from dotenv import dotenv_values
 
+from src.utils.telegram import call, send_message
+
 ROOT = Path(__file__).resolve().parents[2]
+ENV_PATH = ROOT / ".env"
 CONTACT_POINT_PATH = ROOT / "grafana" / "alerting" / "telegram_contact_point.local.yaml"
-API = "https://api.telegram.org/bot{token}/{method}"
 
 CONTACT_POINT = """\
 # python -m src.utils.telegram_setup tarafından üretildi; git'e girmez.
@@ -40,22 +38,6 @@ contactPoints:
 """
 
 
-def call(token: str, method: str, payload: Optional[dict] = None, attempts: int = 6) -> dict:
-    """Bot API çağrısı. Bağlantı ara sıra kopabildiği için birkaç kez dener."""
-    data = json.dumps(payload).encode() if payload is not None else None
-    request = urllib.request.Request(API.format(token=token, method=method), data, {"Content-Type": "application/json"})
-    for attempt in range(attempts):
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                return json.load(response)["result"]
-        except urllib.error.HTTPError as exc:
-            raise SystemExit(f"Telegram {method} hatası: {exc.code} {exc.read().decode()[:200]}") from None
-        except (urllib.error.URLError, ConnectionError, TimeoutError):
-            if attempt == attempts - 1:
-                raise
-            time.sleep(3)
-
-
 def find_chat_id(token: str) -> int:
     """Bota en son yazan özel sohbetin kimliği."""
     chats = [u["message"]["chat"] for u in call(token, "getUpdates") if "message" in u]
@@ -69,22 +51,37 @@ def render_contact_point(chat_id: int) -> str:
     return CONTACT_POINT.format(chat_id=chat_id)
 
 
+def set_env_value(path: Path, key: str, value: str) -> None:
+    """`.env` içinde bir anahtarı günceller ya da sona ekler; diğer satırlara dokunmaz."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i], replaced = f"{key}={value}", True
+    if not replaced:
+        lines.append(f"{key}={value}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Telegram bildirim kanalını Grafana için hazırlar.")
     ap.add_argument("--test", action="store_true", help="Kurulumdan sonra bir deneme mesajı gönder")
     args = ap.parse_args()
 
-    token = dotenv_values(ROOT / ".env").get("TELEGRAM_BOT_TOKEN")
+    env = dotenv_values(ENV_PATH)
+    token = env.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise SystemExit("TELEGRAM_BOT_TOKEN .env dosyasında tanımlı değil.")
     bot = call(token, "getMe")["username"]
-    chat_id = find_chat_id(token)
+    # Telegram eski mesajları bir süre sonra getUpdates'ten düşürür; bulunmuş kimlik korunur.
+    chat_id = int(env["TELEGRAM_CHAT_ID"]) if env.get("TELEGRAM_CHAT_ID") else find_chat_id(token)
     CONTACT_POINT_PATH.write_text(render_contact_point(chat_id), encoding="utf-8")
+    set_env_value(ENV_PATH, "TELEGRAM_CHAT_ID", str(chat_id))
     print(f"Bot      : @{bot}")
     print(f"Sohbet   : {chat_id}")
-    print(f"Yazıldı  : {CONTACT_POINT_PATH.relative_to(ROOT)}")
+    print(f"Yazıldı  : {CONTACT_POINT_PATH.relative_to(ROOT)}, .env (TELEGRAM_CHAT_ID)")
     if args.test:
-        call(token, "sendMessage", {"chat_id": chat_id, "text": "SecDL: Telegram bildirimi kuruldu."})
+        send_message(token, chat_id, "SecDL: Telegram bildirimi kuruldu.")
         print("Deneme mesajı gönderildi.")
     print("Grafana'yı bildirimlerle başlatmak için:")
     print("  docker compose -f docker-compose.yml -f docker-compose.alerting.yml up -d --wait")
