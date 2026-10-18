@@ -395,6 +395,12 @@ aws budgets delete-budget --account-id <hesap-no> --budget-name secdl-monthly
 
 ## Kullanım
 
+Hızlı demo: `demo` (proje klasöründe) bugünün tarihiyle saldırı içeren bir log üretir, ETL'den ve tespitten geçirir, güvenlik dashboard'unu açar. Her çalıştırma yeni seed kullandığından yeni alarmlar oluşur; alerting eklentisi açıksa critical olanlar Telegram'a gider.
+
+```powershell
+.\demo
+```
+
 Gerçek veri: [Loghub OpenSSH_2k.log](https://github.com/logpai/loghub/tree/master/OpenSSH) dosyasını `data/raw/` altına koy. Syslog satırında yıl yoktur; `--year` verilmezse dosyanın değişiklik tarihinden tahmin edilir.
 
 ```powershell
