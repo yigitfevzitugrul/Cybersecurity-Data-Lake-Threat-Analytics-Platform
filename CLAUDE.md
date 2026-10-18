@@ -165,5 +165,11 @@ dags/  grafana/  tests/  docs/
   - `src/utils/telegram.py`: ortak Bot API yardımcıları (sendMessage, sendDocument multipart, yeniden deneme). `telegram_setup` artık bunu kullanıyor, chat id'yi `.env`'ye `TELEGRAM_CHAT_ID` olarak da yazıyor ve varsa onu yeniden kullanıyor.
   - DAG `dags/weekly_security_report.py` (`0 6 * * 1`): `build_report` → `send_report` (Telegram yoksa skipped). `docker-compose.alerting.yml` artık Airflow'a da TELEGRAM_* veriyor. DAG unpause edildi; elle tetiklendi (run `verify_weekly_1`), iki görev success, rapor Telegram'a gitti.
   - Testler: 199.
+- 2026-10-18: **AWS geri kuruldu ve bulut akışı canlı doğrulandı** (geliştirici açıkça istedi; Ocak planı öne çekildi):
+  - `setup`: bucket oluşturuldu, Glue'da `privilege_events` oluşturuldu, diğer 3 tablo güncellendi (alerts'te ATT&CK sütunları). Workgroup, rol, bütçe zaten vardı. Bütçe harcaması 0 USD.
+  - Servisler `-f docker-compose.yml -f docker-compose.cloud.yml -f docker-compose.alerting.yml` ile başlatıldı; Airflow kaçırılan günleri (2026-10-15, 10-17) kendiliğinden çalıştırdı: bütün adımlar success, `sync_to_cloud` + `reconcile_cloud` dahil. reconcile: auth_events 5334, privilege_events 400, alerts 225, daily_ip_summary 789 — hepsi yerel = bulut.
+  - Athena: `01_lake_analysis.sql` 7 sorgu, 44,6 KB; ATT&CK dizi sütunu UNNEST ile sorgulandı. `verify_access` 11/11. Bucket: 84 nesne, ~2 MB.
+  - Bucket artık duruyor. Bulut overlay'iyle her gün çalışan DAG ayda birkaç sentlik S3 isteği + Athena sorgusu yapar (reconcile, sorgu başına en az 10 MB faturalanır). Sunumdan sonra kaynakları geliştirici siler (README'deki komutlar).
+  - `v1.0.0` etiketi henüz atılmadı (rapor/sunum öncesi geliştiriciye soruldu).
 - 2026-10-14 karar: rapor (Claude Doc) ve sunum (Slides artifact) **en sonda, bütün özellikler bittikten sonra baştan yazılacak**; ara özellik eklemelerinde güncelleme. Yeni özellik eklenebilir.
 - Sıradaki: H7–8 — rapor, sunum, demo videosu. PySpark opsiyonel, önerilmiyor.

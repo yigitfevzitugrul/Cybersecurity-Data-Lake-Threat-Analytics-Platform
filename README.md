@@ -355,7 +355,7 @@ python -m src.cloud.reconcile      # yerel veritabanı ile Athena'yı karşıla�
 
 `setup` ve `sync` tekrar çalıştırılabilir: var olan kaynaklar güncellenir, içeriği değişmemiş nesneler yeniden yüklenmez.
 
-Maliyet: bu veri boyutunda (yaklaşık 1 MB) S3, Glue kataloğu ve Athena sorguları pratikte ücretsizdir; örnek analiz dosyasının tamamı 17 KB veri tarar. Bucket kullanılmadığı dönemde silinebilir; `setup` ve `sync` ile birkaç dakikada yeniden oluşturulur.
+Maliyet: bu veri boyutunda (84 nesne, yaklaşık 2 MB) S3, Glue kataloğu ve Athena sorguları pratikte ücretsizdir; örnek analiz dosyasının yedi sorgusu toplam 45 KB veri tarar. Bucket kullanılmadığı dönemde silinebilir; `setup` ve `sync` ile birkaç dakikada yeniden oluşturulur.
 
 ### DAG'den buluta gönderme
 
@@ -365,7 +365,22 @@ Varsayılan kurulumda konteynerlerde AWS kimliği bulunmaz ve DAG'in bulut adım
 docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --wait
 ```
 
-[docker-compose.cloud.yml](docker-compose.cloud.yml), makinedeki `~/.aws` klasörünü Airflow konteynerlerine salt-okunur bağlar. DAG bu kimlikle yalnızca en az yetkili pipeline rolünü üstlenir. Kapatmak için servisleri ek dosya olmadan yeniden başlatmak yeterlidir.
+[docker-compose.cloud.yml](docker-compose.cloud.yml), makinedeki `~/.aws` klasörünü Airflow konteynerlerine salt-okunur bağlar. DAG bu kimlikle yalnızca en az yetkili pipeline rolünü üstlenir. Kapatmak için servisleri ek dosya olmadan yeniden başlatmak yeterlidir. Telegram bildirimleriyle birlikte:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.cloud.yml -f docker-compose.alerting.yml up -d --wait
+```
+
+Canlı doğrulama (2026-10-18): zamanlanmış DAG çalıştırmalarında `sync_to_cloud` ve `reconcile_cloud` başarılı oldu; dört tablonun satır sayıları ve kontrol toplamları PostgreSQL ile Athena'da birebir aynı çıktı:
+
+```
+ok   auth_events       satır 5334 / 5334, deneme 5342 / 5342  (yerel / bulut)
+ok   privilege_events  satır 400 / 400, deneme 400 / 400
+ok   alerts            satır 225 / 225, başarısız deneme 5569 / 5569
+ok   daily_ip_summary  satır 789 / 789, başarısız deneme 4845 / 4845
+```
+
+`verify_access`'in 11 kontrolünün hepsi beklendiği gibi sonuçlandı (4 izin, 7 ret).
 
 Kaynakları kaldırmak için:
 
